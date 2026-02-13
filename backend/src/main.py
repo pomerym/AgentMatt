@@ -18,6 +18,13 @@ from .config_validator import config_validator
 from .mcp_client import MCPManager, MCPError
 from .bitwarden_client import BitwardenClient
 from .secret_resolver import configure_bitwarden, resolve_config, resolve_secret_value
+from .auth import (
+    validate_api_key, 
+    check_rate_limit, 
+    log_action, 
+    get_safe_error_message,
+    get_api_key
+)
 
 # Setup logging
 logging.basicConfig(
@@ -32,14 +39,63 @@ for noisy_logger in ("botocore", "boto3", "urllib3", "s3transfer"):
 
 app = FastAPI()
 
-# Enable CORS for frontend
+# Determine allowed origins based on environment
+allowed_origins = os.environ.get('AGENTMATT_CORS_ORIGINS', 'localhost,127.0.0.1').split(',')
+allowed_origins = [origin.strip() for origin in allowed_origins]
+allowed_origins = [f"http://{origin}" if not origin.startswith('http') else origin for origin in allowed_origins]
+
+logger.info(f'CORS enabled for origins: {allowed_origins}')
+
+# Enable CORS for frontend (restrictive by default)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "X-API-Key", "Content-Type"],
 )
+
+
+# Authentication Middleware
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """
+    Validate API key for all requests except /health and /docs.
+    This middleware runs before request handlers.
+    """
+    
+    # Skip auth for health and docs endpoints
+    if request.url.path in ["/api/health", "/docs", "/openapi.json", "/redoc"]:
+        return await call_next(request)
+    
+    # Check rate limiting
+    try:
+        api_key = request.headers.get('X-API-Key') or (
+            request.headers.get('Authorization', '').replace('Bearer ', '')
+        )
+        if api_key:
+            if not check_rate_limit(api_key):
+                log_action('AUTH_CHECK', request.url.path, 429, api_key=api_key, error='Rate limited')
+                return JSONResponse(
+                    status_code=429,
+                    content={"error": "Rate limit exceeded"}
+                )
+    except Exception as e:
+        logger.warning(f"Rate limit check failed: {e}")
+    
+    # Validate API key
+    try:
+        validate_api_key(request)
+    except Exception as e:
+        log_action('AUTH_CHECK', request.url.path, 401, error=str(e))
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Invalid or missing API key"}
+        )
+    
+    # Proceed with the request
+    response = await call_next(request)
+    return response
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), '../config/server.json')
 PROVIDERS_PATH = os.path.join(os.path.dirname(__file__), '../config/providers.json')
@@ -548,12 +604,15 @@ def _send_to_provider(session_id: str, session, message_content: str) -> dict:
             logger.info(f"[CHAT MESSAGE] Extracted {len(suggested_commands)} suggested command(s) from AI response")
             for cmd in suggested_commands:
                 logger.debug(f"[CHAT MESSAGE] Extracted command: {cmd}")
+                log_action('COMMAND_EXTRACTED', cmd[:50], 200, details={'session_id': session_id})
+            
             pending_queue = session.settings.get("pending_commands") or []
             for cmd in suggested_commands:
                 pending_queue.append({"type": "shell", "command": cmd, "action_type": "command"})
 
             while pending_queue and _scope_allows_command(session, pending_queue[0].get("command", "")):
                 next_cmd = pending_queue.pop(0)
+                log_action('COMMAND_APPROVED', next_cmd.get('command', '')[:50], 200, details={'session_id': session_id, 'auto': True})
                 session_manager.add_action_to_session(
                     session_id,
                     next_cmd.get("action_type", "command"),
@@ -812,6 +871,10 @@ async def post_message(session_id: str, request: Request):
                 if new_scope:
                     command_scope = new_scope
                     session.settings["command_approval_scope"] = new_scope
+                
+                log_action('COMMAND_APPROVED_USER', pending.get('command', '')[:50], 200, 
+                          details={'session_id': session_id, 'action_type': action_type, 'scope': new_scope})
+                
                 session_manager.add_action_to_session(
                     session_id,
                     action_type,
@@ -822,6 +885,9 @@ async def post_message(session_id: str, request: Request):
                 response_text = execute_command_request(pending)
                 session_manager.add_message_to_session(session_id, "assistant", response_text, action_taken=action_type)
             else:
+                log_action('COMMAND_DENIED_USER', pending.get('command', '')[:50], 403, 
+                          details={'session_id': session_id, 'action_type': action_type})
+                
                 if permission_id:
                     permission_manager.deny_permission(permission_id)
                 session_manager.add_action_to_session(

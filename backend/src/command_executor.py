@@ -7,7 +7,12 @@ Provides safe, read-only command execution for agent requests.
 import os
 import re
 import subprocess
+import logging
 from typing import Optional, Dict
+from .command_allowlist import is_command_allowed, get_command_restrictions, sanitize_output
+from .auth import log_action
+
+logger = logging.getLogger(__name__)
 
 REQUEST_KEYWORDS = [
     "project",
@@ -53,24 +58,63 @@ def _run_command(args, cwd: Optional[str] = None) -> str:
 
 
 def _run_shell(command: str, cwd: Optional[str] = None) -> str:
-    result = subprocess.run(
-        command,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-        shell=True
-    )
-    stdout = (result.stdout or "").strip()
-    stderr = (result.stderr or "").strip()
-    output_parts = []
-    if stdout:
-        output_parts.append(stdout)
-    if stderr:
-        output_parts.append("[stderr]\n" + stderr)
-    output = "\n".join(output_parts).strip() or "(no output)"
-    return _truncate_output(output)
+    """
+    Execute a shell command with safety checks and audit logging.
+    """
+    # Validate command against allowlist
+    allowed, reason = is_command_allowed(command)
+    if not allowed:
+        error_msg = f"Command not allowed: {reason}"
+        log_action('EXECUTE_COMMAND', command[:50], 403, error=error_msg)
+        return f"⛔ {error_msg}\n\nThis command is not approved for execution for safety reasons."
+    
+    try:
+        # Get runtime restrictions for this command
+        restrictions = get_command_restrictions(command)
+        
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=restrictions['timeout'],
+            check=False,
+            shell=True
+        )
+        
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
+        output_parts = []
+        
+        if stdout:
+            output_parts.append(stdout)
+        if stderr and restrictions['allow_stderr']:
+            output_parts.append("[stderr]\n" + stderr)
+        
+        output = "\n".join(output_parts).strip() or "(no output)"
+        
+        # Sanitize output to remove sensitive data
+        output = sanitize_output(output, restrictions['max_output'])
+        output = _truncate_output(output, restrictions['max_output'])
+        
+        # Log successful execution
+        log_action(
+            'EXECUTE_COMMAND',
+            command[:50],
+            200,
+            details={'output_length': len(output)}
+        )
+        
+        return output
+        
+    except subprocess.TimeoutExpired:
+        error_msg = f"Command timed out after {get_command_restrictions(command)['timeout']} seconds"
+        log_action('EXECUTE_COMMAND', command[:50], 408, error=error_msg)
+        return f"⏱️ {error_msg}"
+    except Exception as e:
+        error_msg = f"Command execution error: {str(e)[:100]}"
+        log_action('EXECUTE_COMMAND', command[:50], 500, error=error_msg)
+        return f"❌ {error_msg}"
 
 
 def _extract_existing_path(message: str) -> Optional[str]:
