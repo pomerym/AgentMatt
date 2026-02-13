@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
 BACKEND_PORT=8000
 FRONTEND_PORT=3000
-LOG_DIR="$HOME/tmp"
+LOG_DIR="$PROJECT_ROOT/logs"
 
 # Colors for output
 RED='\033[0;31m'

@@ -16,6 +16,7 @@ dist/
 # Runtime data
 backend/db/*.json
 output.json
+logs/
 
 # Universal
 .DS_Store

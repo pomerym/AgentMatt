@@ -237,13 +237,28 @@ register_plugins(agent)
 # Initialize providers after plugins and agent are ready
 initialize_providers()
 
-@app.get("/api/chat/start")
-def start_chat():
+@app.post("/api/chat/start")
+async def start_chat(request: Request = None):
     """Start a new chat session."""
     logger.info(f"[CHAT START] Creating new session")
+    name = None
+    if request is not None:
+        try:
+            payload = await request.json()
+            name = (payload or {}).get("name")
+        except Exception:
+            name = None
+    session = session_manager.create_session(name=name)
+    logger.info(f"[CHAT START] Session created: {session.session_id}")
+    return {"session_id": session.session_id, "name": session.name, "status": "started"}
+
+@app.get("/api/chat/start")
+def start_chat_get():
+    """Start a new chat session (legacy GET)."""
+    logger.info(f"[CHAT START] Creating new session (GET)")
     session = session_manager.create_session()
     logger.info(f"[CHAT START] Session created: {session.session_id}")
-    return {"session_id": session.session_id, "status": "started"}
+    return {"session_id": session.session_id, "name": session.name, "status": "started"}
 
 @app.post("/api/chat/{session_id}/close")
 def close_chat(session_id: str):
@@ -261,6 +276,24 @@ def list_chat_sessions():
     """List existing chat sessions."""
     sessions = session_manager.list_sessions()
     return {"sessions": sessions}
+
+@app.post("/api/chat/{session_id}/rename")
+async def rename_chat_session(session_id: str, request: Request):
+    """Rename an existing chat session."""
+    try:
+        payload = await request.json()
+    except Exception as e:
+        return {"error": f"Invalid request body: {str(e)}"}, 400
+
+    name = (payload or {}).get("name")
+    if not name or not str(name).strip():
+        return {"error": "Session name cannot be empty"}, 400
+
+    session = session_manager.rename_session(session_id, str(name).strip())
+    if not session:
+        return {"error": "Session not found"}, 404
+
+    return {"status": "renamed", "session_id": session.session_id, "name": session.name}
 
 @app.get("/api/chat/{session_id}/history")
 def get_history(session_id: str):
