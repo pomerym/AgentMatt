@@ -17,7 +17,7 @@ from .learning import memory_manager
 from .config_validator import config_validator
 from .mcp_client import MCPManager, MCPError
 from .bitwarden_client import BitwardenClient
-from .secret_resolver import configure_bitwarden, resolve_config
+from .secret_resolver import configure_bitwarden, resolve_config, resolve_secret_value
 
 # Setup logging
 logging.basicConfig(
@@ -470,9 +470,12 @@ def _send_to_provider(session_id: str, session, message_content: str) -> dict:
             history_for_provider.append({"role": role, "content": content})
 
     try:
+        # Resolve any Bitwarden credential references in the message
+        resolved_message = resolve_secret_value(message_content)
+        
         logger.info(f"[CHAT MESSAGE] Sending message to {provider.name} provider")
         ai_response = provider.send_message(
-            message_content,
+            resolved_message,
             {
                 "session_id": session_id,
                 "history": history_for_provider,
