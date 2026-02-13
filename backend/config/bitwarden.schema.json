@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Bitwarden Configuration Schema",
+  "type": "object",
+  "required": ["enabled", "base_url"],
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "description": "Whether Bitwarden integration is enabled"
+    },
+    "base_url": {
+      "type": "string",
+      "description": "Base URL for bw serve"
+    },
+    "cache_ttl": {
+      "type": "integer",
+      "description": "Seconds to cache item lookups",
+      "default": 30
+    },
+    "timeout": {
+      "type": "integer",
+      "description": "HTTP timeout in seconds",
+      "default": 10
+    },
+    "aliases": {
+      "type": "object",
+      "description": "Alias map for Bitwarden items",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["item", "field"],
+        "properties": {
+          "item": {"type": "string"},
+          "field": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

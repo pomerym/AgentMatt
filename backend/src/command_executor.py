@@ -153,16 +153,20 @@ def extract_shell_commands(text: str) -> list[str]:
 
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("$"):
+        if stripped.startswith("$ "):
             cmd = stripped.lstrip("$").strip()
             if cmd:
                 commands.append(cmd)
 
-    fenced = re.findall(r"```(?:bash|sh|shell)?\n([\s\S]*?)```", text, re.IGNORECASE)
-    for block in fenced:
+    fenced = re.findall(r"```(bash|sh|shell)?\n([\s\S]*?)```", text, re.IGNORECASE)
+    for lang, block in fenced:
+        if not lang:
+            continue
         for line in block.splitlines():
             stripped = line.strip()
             if stripped and not stripped.startswith("#"):
+                if stripped.startswith("$"):
+                    stripped = stripped.lstrip("$").strip()
                 commands.append(stripped)
 
     return commands

@@ -2,5 +2,26 @@
   "host": "localhost",
   "port": 8000,
   "database": "agno_agent.db",
-  "log_level": "info"
+  "log_level": "info",
+  "mcp": {
+    "tool_cache_ttl": 30,
+    "servers": [
+      {
+        "id": "Splunk_DEV",
+        "name": "Splunk DEV",
+        "transport": "stdio",
+        "command": "npx",
+        "args": [
+          "-y",
+          "mcp-remote",
+          "https://beneva-dev.splunkcloud.com:8089/services/mcp",
+          "--header",
+          "Authorization: Bearer bw://Splunk DEV MCP/notes"
+        ],
+        "env": {
+          "NODE_TLS_REJECT_UNAUTHORIZED": "0"
+        }
+      }
+    ]
+  }
 }

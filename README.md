@@ -10,6 +10,8 @@ persistent chat history and memory.
 - React frontend for chat, approvals, and provider settings
 - Action logging with permission requests and audit trail
 - Memory and learning endpoints for persistent context
+- **MCP (Model Context Protocol) server support** with stdio and HTTP transports
+- **Bitwarden integration** for secure credential management
 
 ## Architecture
 
@@ -33,6 +35,8 @@ Ports:
 
 ## Configuration
 
+### AI Providers
+
 Provider configuration lives in backend/config/providers.json. Use env var
 placeholders to avoid committing secrets.
 
@@ -44,6 +48,28 @@ Required env vars for Bedrock:
 
 Copilot:
 - `COPILOT_API_KEY`
+
+##**MCP server configuration**: [MCP_SERVER_CONFIGURATION.md](MCP_SERVER_CONFIGURATION.md)
+- **Bitwarden integration**: [BITWARDEN_INTEGRATION.md](BITWARDEN_INTEGRATION.md)
+- Server management: [SERVER_MANAGEMENT.md](SERVER_MANAGEMENT.md)
+- Bedrock integration notes: [AWS_BEDROCK_INTEGRATION.md](AWS_BEDROCK_INTEGRATION.md)
+- Bedrock access setup: [SETUP_BEDROCK_ACCESS.md](SETUP_BEDROCK_ACCESS.md)
+- Backend details: [backend/README.md](backend/README.md)
+- Frontend details: [frontend/README.md](frontend/README.md)
+- stdio transport for local processes
+- Bitwarden references for secrets (e.g., `bw://ItemName/field`)
+
+See [MCP_SERVER_CONFIGURATION.md](MCP_SERVER_CONFIGURATION.md) for detailed guide.
+
+### Bitwarden Integration
+
+Retrieve secrets from your Bitwarden vault via `bw serve`:
+
+1. Start `bw serve --hostname localhost --port 8087`
+2. Enable in backend/config/bitwarden.json
+3. Use `bw://ItemName/field` syntax in configs
+
+See [BITWARDEN_INTEGRATION.md](BITWARDEN_INTEGRATION.md) for setup guide.
 
 ## Useful Docs
 

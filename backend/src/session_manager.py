@@ -25,7 +25,7 @@ class ChatSession:
         self.end_time = None
         self.messages = []
         self.actions = []
-        self.settings = settings or {"verbose": False}
+        self.settings = settings or {"verbose": False, "auto_continue": True}
     
     def add_message(self, sender: str, content: str, action_taken: Optional[str] = None):
         """Add a message to the session."""

@@ -15,6 +15,9 @@ from .permissions import permission_manager
 from .command_executor import detect_command_request, execute_command_request, extract_shell_commands
 from .learning import memory_manager
 from .config_validator import config_validator
+from .mcp_client import MCPManager, MCPError
+from .bitwarden_client import BitwardenClient
+from .secret_resolver import configure_bitwarden, resolve_config
 
 # Setup logging
 logging.basicConfig(
@@ -40,6 +43,7 @@ app.add_middleware(
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), '../config/server.json')
 PROVIDERS_PATH = os.path.join(os.path.dirname(__file__), '../config/providers.json')
+BITWARDEN_PATH = os.path.join(os.path.dirname(__file__), '../config/bitwarden.json')
 
 # AWS Bedrock model options
 BEDROCK_MODELS = [
@@ -71,10 +75,43 @@ AWS_REGIONS = [
 
 def load_providers_config():
     with open(PROVIDERS_PATH) as f:
+        return resolve_config(json.load(f))
+
+def load_server_config():
+    with open(CONFIG_PATH) as f:
+        return resolve_config(json.load(f))
+
+def load_bitwarden_config():
+    if not os.path.exists(BITWARDEN_PATH):
+        return {}
+    with open(BITWARDEN_PATH) as f:
         return json.load(f)
+
+def initialize_bitwarden():
+    config = load_bitwarden_config()
+    if not config or not config.get("enabled"):
+        configure_bitwarden(None)
+        return
+
+    base_url = config.get("base_url")
+    if not base_url:
+        logger.warning("[BITWARDEN] Missing base_url in config; disabled")
+        configure_bitwarden(None)
+        return
+
+    client = BitwardenClient(
+        base_url=base_url,
+        cache_ttl=int(config.get("cache_ttl", 30)),
+        timeout=int(config.get("timeout", 10))
+    )
+    configure_bitwarden(client, config.get("aliases", {}))
 
 def save_providers_config(config):
     with open(PROVIDERS_PATH, 'w') as f:
+        json.dump(config, f, indent=2)
+
+def save_server_config(config):
+    with open(CONFIG_PATH, 'w') as f:
         json.dump(config, f, indent=2)
 
 def initialize_providers():
@@ -117,13 +154,19 @@ def initialize_providers():
             logger.info(f"[PROVIDERS] Active provider set to: {active}")
         else:
             logger.warning(f"[PROVIDERS] Could not set active provider to {active}")
-            
+
         return True
         
     except Exception as e:
         logger.error(f"[PROVIDERS] Failed to initialize providers: {str(e)}")
         logger.exception("[PROVIDERS] Full traceback:")
         return False
+
+
+initialize_bitwarden()
+
+server_config = load_server_config()
+mcp_manager = MCPManager(server_config.get("mcp", {}))
 
 
 def _normalize_command(command: str) -> str:
@@ -229,6 +272,338 @@ def _scope_allows_command(session, command: str) -> bool:
         scopes.append(session_scope)
     scopes.extend(_get_persistent_scopes(session.user_id))
     return any(_command_matches_scope(command, scope) for scope in scopes)
+
+
+def _format_mcp_tools(tools: list[dict]) -> str:
+    if not tools:
+        return "No MCP tools found."
+    lines = ["Available MCP tools:"]
+    for tool in tools:
+        name = tool.get("name", "")
+        server_id = tool.get("server_id", "")
+        description = tool.get("description", "")
+        entry = f"- {server_id}/{name}"
+        if description:
+            entry += f": {description}"
+        lines.append(entry)
+    return "\n".join(lines)
+
+
+def _handle_mcp_command(message_content: str) -> str:
+    parts = shlex.split(message_content)
+    if len(parts) == 1 or parts[1] in {"help", "?"}:
+        return (
+            "MCP usage:\n"
+            "/mcp servers\n"
+            "/mcp list\n"
+            "/mcp <server_id> <tool_name> {json_args}"
+        )
+
+    subcommand = parts[1].lower()
+    if subcommand == "servers":
+        servers = mcp_manager.list_servers()
+        if not servers:
+            return "No MCP servers configured."
+        lines = ["Configured MCP servers:"]
+        for server in servers:
+            name = server.get("name") or server.get("id")
+            transport = server.get("transport")
+            lines.append(f"- {server.get('id')}: {name} ({transport})")
+        return "\n".join(lines)
+
+    if subcommand == "list":
+        return _format_mcp_tools(mcp_manager.list_tools())
+
+    if len(parts) < 3:
+        return "Usage: /mcp <server_id> <tool_name> {json_args}"
+
+    server_id = parts[1]
+    tool_name = parts[2]
+    args_raw = " ".join(parts[3:]).strip()
+    arguments = {}
+    if args_raw:
+        try:
+            arguments = json.loads(args_raw)
+        except json.JSONDecodeError:
+            return "Invalid JSON args. Example: /mcp server tool {\"query\": \"value\"}"
+
+    try:
+        result = mcp_manager.call_tool(server_id, tool_name, arguments)
+    except MCPError as exc:
+        return f"MCP error: {exc}"
+    except Exception as exc:
+        return f"MCP error: {exc}"
+
+    return json.dumps(result, indent=2)
+
+
+def _extract_mcp_commands(text: str) -> list:
+    """Extract MCP commands from text"""
+    commands = []
+    for line in text.splitlines():
+        if "/mcp" not in line:
+            continue
+        try:
+            tokens = shlex.split(line)
+        except ValueError:
+            continue
+        for idx, token in enumerate(tokens):
+            if token != "/mcp":
+                continue
+            if idx + 1 >= len(tokens):
+                continue
+            first = tokens[idx + 1]
+            if first in {"list", "servers", "help", "?"}:
+                continue
+
+            server_id = ""
+            tool_name = ""
+            args_tokens = []
+
+            if "/" in first and (idx + 2 >= len(tokens) or tokens[idx + 2].startswith("{")):
+                server_id, tool_name = first.split("/", 1)
+                args_tokens = tokens[idx + 2:]
+            elif idx + 2 < len(tokens):
+                server_id = first
+                tool_name = tokens[idx + 2]
+                args_tokens = tokens[idx + 3:]
+            else:
+                continue
+
+            args_raw = " ".join(args_tokens).strip()
+            arguments = {}
+            if args_raw:
+                try:
+                    arguments = json.loads(args_raw)
+                except json.JSONDecodeError:
+                    arguments = {}
+
+            if server_id and tool_name:
+                commands.append({"server_id": server_id, "tool_name": tool_name, "arguments": arguments})
+    return commands
+
+
+def _execute_mcp_commands_in_response(ai_response: str) -> tuple[str, list]:
+    """Execute any MCP commands found in AI response and return updated response with results"""
+    mcp_commands = _extract_mcp_commands(ai_response)
+    if not mcp_commands:
+        return ai_response, []
+    
+    results = []
+    for cmd in mcp_commands:
+        try:
+            result = mcp_manager.call_tool(cmd["server_id"], cmd["tool_name"], cmd["arguments"])
+            results.append({"command": cmd, "result": result, "success": True})
+        except Exception as exc:
+            results.append({"command": cmd, "error": str(exc), "success": False})
+    
+    return ai_response, results
+
+
+def _send_to_provider(session_id: str, session, message_content: str) -> dict:
+    config = load_providers_config()
+    active_provider = config.get("provider", "copilot")
+    logger.info(f"[CHAT MESSAGE] Active provider: {active_provider}")
+
+    provider = provider_registry.get_provider(active_provider)
+    if not provider:
+        error_msg = f"Provider '{active_provider}' not found"
+        logger.error(f"[CHAT MESSAGE] {error_msg}")
+        return {"error": error_msg}, 500
+
+    logger.info(f"[CHAT MESSAGE] Found provider: {provider.name}")
+
+    if not provider.initialized:
+        logger.warning(f"[CHAT MESSAGE] Provider {provider.name} not initialized, attempting initialization...")
+
+        if not provider.validate_config():
+            error_msg = f"Provider '{active_provider}' is not properly configured. Please configure it in settings."
+            logger.error(f"[CHAT MESSAGE] {error_msg}")
+            session_manager.add_message_to_session(session_id, "assistant", error_msg)
+            return {"error": error_msg}, 500
+
+        if not provider.initialize():
+            error_msg = f"Failed to initialize provider '{active_provider}'. Check your configuration."
+            logger.error(f"[CHAT MESSAGE] {error_msg}")
+            session_manager.add_message_to_session(session_id, "assistant", error_msg)
+            return {"error": error_msg}, 500
+
+        logger.info(f"[CHAT MESSAGE] Provider {provider.name} initialized successfully")
+
+    session_history = session_manager.get_session_history(session_id)
+    history_for_provider = []
+    system_parts = [
+        "You are AgentMatt. Maintain continuity across turns and use provided memory if relevant.",
+        "Be concise, but include reasoning steps when the user asks for analysis or decisions.",
+        "If unsure, ask a clarifying question rather than guessing."
+    ]
+
+    if session.settings.get("verbose"):
+        system_parts.append(
+            "Verbose mode is enabled. Provide a brief 'Reasoning Summary' with high-level steps only."
+        )
+
+    profile = memory_manager.get_profile(session.user_id)
+    if profile:
+        system_parts.append("User profile:\n" + json.dumps(profile, indent=2))
+
+    latest_summary = memory_manager.get_latest_summary(session.user_id)
+    if latest_summary and isinstance(latest_summary.data, dict):
+        summary_text = latest_summary.data.get("summary")
+        if summary_text:
+            system_parts.append("Recent session summary:\n" + summary_text)
+
+    memory_hits = memory_manager.search(session.user_id, message_content, limit=5)
+    if memory_hits:
+        memory_lines = []
+        for mem in memory_hits:
+            data = mem.data
+            if isinstance(data, dict):
+                data = json.dumps(data)
+            memory_lines.append(f"- {data}")
+        system_parts.append("Relevant long-term memory:\n" + "\n".join(memory_lines))
+
+    for msg in session_history[-20:]:
+        role = "assistant" if msg.get("sender") == "assistant" else "user"
+        content = msg.get("content", "")
+        if content:
+            history_for_provider.append({"role": role, "content": content})
+
+    try:
+        logger.info(f"[CHAT MESSAGE] Sending message to {provider.name} provider")
+        ai_response = provider.send_message(
+            message_content,
+            {
+                "session_id": session_id,
+                "history": history_for_provider,
+                "system": "\n\n".join(system_parts)
+            }
+        )
+        logger.info(f"[CHAT MESSAGE] Received response from {provider.name}: {ai_response[:100] if ai_response else 'None'}")
+
+        if ai_response and ai_response.startswith("Error:"):
+            logger.error(f"[CHAT MESSAGE] Provider returned error: {ai_response}")
+            session_manager.add_message_to_session(session_id, "assistant", ai_response)
+            return {"error": ai_response}, 500
+
+        # Check for MCP commands in the AI response and execute them
+        updated_response,mcp_results = _execute_mcp_commands_in_response(ai_response or "")
+        if mcp_results:
+            logger.info(f"[CHAT MESSAGE] Executed {len(mcp_results)} MCP command(s) from AI response")
+            # Build a response that includes the MCP results
+            result_parts = []
+            for mcp_result in mcp_results:
+                if mcp_result["success"]:
+                    cmd = mcp_result["command"]
+                    result = mcp_result["result"]
+                    # Format the result for the AI
+                    result_text = json.dumps(result, indent=2) if isinstance(result, (dict, list)) else str(result)
+                    result_parts.append(f"Result from {cmd['tool_name']}:\n{result_text}")
+                else:
+                    cmd = mcp_result["command"]
+                    result_parts.append(f"Error from {cmd['tool_name']}: {mcp_result.get('error', 'Unknown error')}")
+            
+            # Add the results to the conversation and ask the AI to summarize
+            combined_results = "\n\n".join(result_parts)
+            session_manager.add_message_to_session(session_id, "assistant", updated_response)
+            session_manager.add_message_to_session(session_id, "system", f"MCP Tool Results:\n{combined_results}")
+            
+            # Ask the AI to provide a user-friendly response based on the results
+            history_with_results = history_for_provider + [
+                {"role": "assistant", "content": updated_response},
+                {"role": "user", "content": f"Based on these MCP tool results, please provide a clear summary:\n\n{combined_results}"}
+            ]
+            
+            try:
+                final_response = provider.send_message(
+                    "Summarize the above MCP results for the user",
+                    {
+                        "session_id": session_id,
+                        "history": history_with_results,
+                        "system": "\n\n".join(system_parts)
+                    }
+                )
+                ai_response = final_response
+            except Exception as e:
+                logger.error(f"[CHAT MESSAGE] Error getting final response after MCP: {e}")
+                ai_response = f"{updated_response}\n\n{combined_results}"
+
+        suggested_commands = extract_shell_commands(ai_response or "")
+        if suggested_commands:
+            pending_queue = session.settings.get("pending_commands") or []
+            for cmd in suggested_commands:
+                pending_queue.append({"type": "shell", "command": cmd, "action_type": "command"})
+
+            while pending_queue and _scope_allows_command(session, pending_queue[0].get("command", "")):
+                next_cmd = pending_queue.pop(0)
+                session_manager.add_action_to_session(
+                    session_id,
+                    next_cmd.get("action_type", "command"),
+                    status="completed",
+                    permission_requested=False,
+                    permission_granted=True
+                )
+                response_text = execute_command_request(next_cmd)
+                session_manager.add_message_to_session(
+                    session_id,
+                    "assistant",
+                    response_text,
+                    action_taken=next_cmd.get("action_type", "command")
+                )
+
+            if pending_queue:
+                next_cmd = pending_queue[0]
+                if not next_cmd.get("permission_id"):
+                    permission = permission_manager.request_permission(
+                        "default",
+                        "command",
+                        f"Run command: {_normalize_command(next_cmd.get('command', ''))}",
+                        required=True
+                    )
+                    next_cmd["permission_id"] = permission.id
+                    pending_queue[0] = next_cmd
+
+                session.settings["pending_commands"] = pending_queue
+                session_manager._save()
+                session_manager.add_action_to_session(
+                    session_id,
+                    "command",
+                    status="pending",
+                    permission_requested=True,
+                    permission_granted=False
+                )
+                session_manager.add_message_to_session(session_id, "assistant", ai_response)
+                session_manager.add_message_to_session(
+                    session_id,
+                    "assistant",
+                    "Approval required to run: "
+                    f"{_normalize_command(next_cmd.get('command', ''))}\n"
+                    "Reply with /approve, /approve command (permanent), /approve command-subcommand (permanent), /approve exact, or /deny.",
+                    action_taken="command"
+                )
+                session_history = session_manager.get_session_history(session_id)
+                return {
+                    "session_id": session_id,
+                    "status": "ok",
+                    "message": "Approval required",
+                    "messages_count": len(session_history)
+                }
+
+        session_manager.add_message_to_session(session_id, "assistant", ai_response)
+        logger.info(f"[CHAT MESSAGE] AI response added to session")
+        session_history = session_manager.get_session_history(session_id)
+        logger.info(f"[CHAT MESSAGE] Message processed successfully. Total messages: {len(session_history)}")
+        return {
+            "session_id": session_id,
+            "status": "ok",
+            "message": "Message processed",
+            "messages_count": len(session_history)
+        }
+    except Exception as e:
+        error_msg = f"Error calling AI provider: {str(e)}"
+        logger.error(f"[CHAT MESSAGE] {error_msg}")
+        logger.exception("[CHAT MESSAGE] Full exception:")
+        return {"error": error_msg}, 500
 
 # Load and register plugins on startup
 load_all_plugins()
@@ -360,6 +735,35 @@ async def post_message(session_id: str, request: Request):
                 "messages_count": len(session_history)
             }
 
+        if message_content.startswith("/autocontinue"):
+            parts = message_content.split()
+            mode = parts[1].lower() if len(parts) > 1 else "on"
+            enabled = mode in ["on", "true", "1", "yes"]
+            session.settings["auto_continue"] = enabled
+            session_manager._save()
+            session_manager.add_message_to_session(session_id, "user", message_content)
+            reply = f"Auto-continue {'enabled' if enabled else 'disabled'} for this session."
+            session_manager.add_message_to_session(session_id, "assistant", reply)
+            session_history = session_manager.get_session_history(session_id)
+            return {
+                "session_id": session_id,
+                "status": "ok",
+                "message": "Auto-continue updated",
+                "messages_count": len(session_history)
+            }
+
+        if message_content.startswith("/mcp"):
+            session_manager.add_message_to_session(session_id, "user", message_content)
+            reply = _handle_mcp_command(message_content)
+            session_manager.add_message_to_session(session_id, "assistant", reply)
+            session_history = session_manager.get_session_history(session_id)
+            return {
+                "session_id": session_id,
+                "status": "ok",
+                "message": "MCP handled",
+                "messages_count": len(session_history)
+            }
+
         if message_content.startswith("/approve") or message_content.startswith("/deny"):
             approved = message_content.startswith("/approve")
             session_manager.add_message_to_session(session_id, "user", message_content)
@@ -411,13 +815,13 @@ async def post_message(session_id: str, request: Request):
                 )
                 session_manager.add_message_to_session(session_id, "assistant", "Command denied.", action_taken=action_type)
 
-            while pending_queue and approved and _command_matches_scope(pending_queue[0].get("command", ""), command_scope):
+            while pending_queue and approved and _scope_allows_command(session, pending_queue[0].get("command", "")):
                 next_cmd = pending_queue.pop(0)
                 session_manager.add_action_to_session(
                     session_id,
                     next_cmd.get("action_type", "command"),
                     status="completed",
-                    permission_requested=True,
+                    permission_requested=False,
                     permission_granted=True
                 )
                 response_text = execute_command_request(next_cmd)
@@ -433,7 +837,7 @@ async def post_message(session_id: str, request: Request):
                 next_permission = permission_manager.request_permission(
                     "default",
                     next_cmd.get("action_type", "command"),
-                    f"Run command: {next_cmd.get('command')}",
+                    f"Run command: {_normalize_command(next_cmd.get('command', ''))}",
                     required=True
                 )
                 next_cmd["permission_id"] = next_permission.id
@@ -444,7 +848,7 @@ async def post_message(session_id: str, request: Request):
                     session_id,
                     "assistant",
                     "Approval required to run: "
-                    f"{next_cmd.get('command')}\n"
+                    f"{_normalize_command(next_cmd.get('command', ''))}\n"
                     "Reply with /approve, /approve command (permanent), /approve command-subcommand (permanent), /approve exact, or /deny.",
                     action_taken="command"
                 )
@@ -452,6 +856,12 @@ async def post_message(session_id: str, request: Request):
                 session.settings.pop("pending_commands", None)
                 session.settings.pop("pending_command", None)
                 session_manager._save()
+
+            followup = session.settings.pop("pending_followup", None) if approved else None
+            if approved and followup:
+                session_manager._save()
+                session_manager.add_message_to_session(session_id, "user", "continue")
+                return _send_to_provider(session_id, session, "continue")
 
             session_history = session_manager.get_session_history(session_id)
             return {
@@ -490,6 +900,8 @@ async def post_message(session_id: str, request: Request):
             command_request["permission_id"] = permission.id
             command_request["action_type"] = action_type
             session.settings["pending_commands"] = [command_request]
+            if session.settings.get("auto_continue", True):
+                session.settings["pending_followup"] = {"mode": "auto_continue"}
             session_manager._save()
 
             prompt = (
@@ -505,180 +917,7 @@ async def post_message(session_id: str, request: Request):
                 "messages_count": len(session_history)
             }
 
-        # Get current provider
-        config = load_providers_config()
-        active_provider = config.get("provider", "copilot")
-        logger.info(f"[CHAT MESSAGE] Active provider: {active_provider}")
-        
-        # Get provider from registry
-        provider = provider_registry.get_provider(active_provider)
-        if not provider:
-            error_msg = f"Provider '{active_provider}' not found"
-            logger.error(f"[CHAT MESSAGE] {error_msg}")
-            return {"error": error_msg}, 500
-        
-        logger.info(f"[CHAT MESSAGE] Found provider: {provider.name}")
-        
-        # Ensure provider is initialized
-        if not provider.initialized:
-            logger.warning(f"[CHAT MESSAGE] Provider {provider.name} not initialized, attempting initialization...")
-            
-            # Validate configuration
-            if not provider.validate_config():
-                error_msg = f"Provider '{active_provider}' is not properly configured. Please configure it in settings."
-                logger.error(f"[CHAT MESSAGE] {error_msg}")
-                session_manager.add_message_to_session(session_id, "assistant", error_msg)
-                return {"error": error_msg}, 500
-            
-            # Try to initialize
-            if not provider.initialize():
-                error_msg = f"Failed to initialize provider '{active_provider}'. Check your configuration."
-                logger.error(f"[CHAT MESSAGE] {error_msg}")
-                session_manager.add_message_to_session(session_id, "assistant", error_msg)
-                return {"error": error_msg}, 500
-            
-            logger.info(f"[CHAT MESSAGE] Provider {provider.name} initialized successfully")
-        
-        # Build conversation context from session history (last 20 messages)
-        session_history = session_manager.get_session_history(session_id)
-        history_for_provider = []
-        system_parts = [
-            "You are AgentMatt. Maintain continuity across turns and use provided memory if relevant.",
-            "Be concise, but include reasoning steps when the user asks for analysis or decisions.",
-            "If unsure, ask a clarifying question rather than guessing."
-        ]
-
-        if session.settings.get("verbose"):
-            system_parts.append(
-                "Verbose mode is enabled. Provide a brief 'Reasoning Summary' with high-level steps only."
-            )
-
-        profile = memory_manager.get_profile(session.user_id)
-        if profile:
-            system_parts.append("User profile:\n" + json.dumps(profile, indent=2))
-
-        latest_summary = memory_manager.get_latest_summary(session.user_id)
-        if latest_summary and isinstance(latest_summary.data, dict):
-            summary_text = latest_summary.data.get("summary")
-            if summary_text:
-                system_parts.append("Recent session summary:\n" + summary_text)
-
-        memory_hits = memory_manager.search(session.user_id, message_content, limit=5)
-        if memory_hits:
-            memory_lines = []
-            for mem in memory_hits:
-                data = mem.data
-                if isinstance(data, dict):
-                    data = json.dumps(data)
-                memory_lines.append(f"- {data}")
-            system_parts.append("Relevant long-term memory:\n" + "\n".join(memory_lines))
-        for msg in session_history[-20:]:
-            role = "assistant" if msg.get("sender") == "assistant" else "user"
-            content = msg.get("content", "")
-            if content:
-                history_for_provider.append({"role": role, "content": content})
-
-        # Send message to AI provider
-        try:
-            logger.info(f"[CHAT MESSAGE] Sending message to {provider.name} provider")
-            ai_response = provider.send_message(
-                message_content,
-                {
-                    "session_id": session_id,
-                    "history": history_for_provider,
-                    "system": "\n\n".join(system_parts)
-                }
-            )
-            logger.info(f"[CHAT MESSAGE] Received response from {provider.name}: {ai_response[:100] if ai_response else 'None'}")
-            
-            # Check if response contains error message (some providers return error strings)
-            if ai_response and ai_response.startswith("Error:"):
-                logger.error(f"[CHAT MESSAGE] Provider returned error: {ai_response}")
-                session_manager.add_message_to_session(session_id, "assistant", ai_response)
-                return {"error": ai_response}, 500
-            
-            # If AI suggests commands, require approval before execution
-            suggested_commands = extract_shell_commands(ai_response or "")
-            if suggested_commands:
-                pending_queue = session.settings.get("pending_commands") or []
-                for cmd in suggested_commands:
-                    pending_queue.append({"type": "shell", "command": cmd, "action_type": "command"})
-
-                while pending_queue and _scope_allows_command(session, pending_queue[0].get("command", "")):
-                    next_cmd = pending_queue.pop(0)
-                    session_manager.add_action_to_session(
-                        session_id,
-                        next_cmd.get("action_type", "command"),
-                        status="completed",
-                        permission_requested=False,
-                        permission_granted=True
-                    )
-                    response_text = execute_command_request(next_cmd)
-                    session_manager.add_message_to_session(
-                        session_id,
-                        "assistant",
-                        response_text,
-                        action_taken=next_cmd.get("action_type", "command")
-                    )
-
-                if pending_queue:
-                    next_cmd = pending_queue[0]
-                    if not next_cmd.get("permission_id"):
-                        permission = permission_manager.request_permission(
-                            "default",
-                            "command",
-                            f"Run command: {_normalize_command(next_cmd.get('command', ''))}",
-                            required=True
-                        )
-                        next_cmd["permission_id"] = permission.id
-                        pending_queue[0] = next_cmd
-
-                    session.settings["pending_commands"] = pending_queue
-                    session_manager._save()
-                    session_manager.add_action_to_session(
-                        session_id,
-                        "command",
-                        status="pending",
-                        permission_requested=True,
-                        permission_granted=False
-                    )
-                    session_manager.add_message_to_session(session_id, "assistant", ai_response)
-                    session_manager.add_message_to_session(
-                        session_id,
-                        "assistant",
-                        "Approval required to run: "
-                        f"{_normalize_command(next_cmd.get('command', ''))}\n"
-                        "Reply with /approve, /approve command (permanent), /approve command-subcommand (permanent), /approve exact, or /deny.",
-                        action_taken="command"
-                    )
-                    session_history = session_manager.get_session_history(session_id)
-                    return {
-                        "session_id": session_id,
-                        "status": "ok",
-                        "message": "Approval required",
-                        "messages_count": len(session_history)
-                    }
-
-            # Add AI response to session
-            session_manager.add_message_to_session(session_id, "assistant", ai_response)
-            logger.info(f"[CHAT MESSAGE] AI response added to session")
-            
-        except Exception as e:
-            error_msg = f"Error calling AI provider: {str(e)}"
-            logger.error(f"[CHAT MESSAGE] {error_msg}")
-            logger.exception("[CHAT MESSAGE] Full exception:")
-            return {"error": error_msg}, 500
-        
-        # Return success with message count
-        session_history = session_manager.get_session_history(session_id)
-        logger.info(f"[CHAT MESSAGE] Message processed successfully. Total messages: {len(session_history)}")
-        
-        return {
-            "session_id": session_id,
-            "status": "ok",
-            "message": "Message processed",
-            "messages_count": len(session_history)
-        }
+        return _send_to_provider(session_id, session, message_content)
         
     except Exception as e:
         error_msg = f"Unexpected error: {str(e)}"
@@ -884,7 +1123,119 @@ def list_plugins():
 
 @app.get("/api/agent/tools")
 def list_tools():
-    return {"tools": list(agent.tools.keys())}
+    mcp_tools = []
+    try:
+        mcp_tools = [f"mcp:{t['server_id']}/{t['name']}" for t in mcp_manager.list_tools()]
+    except Exception as exc:
+        logger.warning("[MCP] Failed to list tools: %s", exc)
+    tools = list(agent.tools.keys()) + mcp_tools
+    return {"tools": tools}
+
+@app.get("/api/mcp/servers")
+def list_mcp_servers():
+    return {"servers": mcp_manager.list_servers()}
+
+@app.get("/api/mcp/tools")
+def list_mcp_tools():
+    return {"tools": mcp_manager.list_tools()}
+
+@app.post("/api/mcp/call")
+async def call_mcp_tool(request: Request):
+    body = await request.json()
+    server_id = body.get("server_id")
+    tool_name = body.get("tool_name")
+    arguments = body.get("arguments") or {}
+
+    if not server_id or not tool_name:
+        return {"error": "server_id and tool_name are required"}, 400
+
+    try:
+        result = mcp_manager.call_tool(server_id, tool_name, arguments)
+        return {"result": result}
+    except MCPError as exc:
+        return {"error": str(exc)}, 400
+    except Exception as exc:
+        return {"error": str(exc)}, 500
+
+@app.post("/api/mcp/server")
+async def save_mcp_server(request: Request):
+    """Add or update MCP server configuration."""
+    body = await request.json()
+    server_id = body.get("id")
+    if not server_id:
+        return {"error": "Server id is required"}, 400
+
+    server_config = {
+        "id": server_id,
+        "name": body.get("name"),
+        "transport": body.get("transport")
+    }
+
+    if server_config["transport"] == "http":
+        server_config["url"] = body.get("url")
+        if body.get("headers"):
+            server_config["headers"] = body.get("headers")
+    elif server_config["transport"] == "stdio":
+        server_config["command"] = body.get("command")
+        if body.get("args"):
+            server_config["args"] = body.get("args")
+        if body.get("cwd"):
+            server_config["cwd"] = body.get("cwd")
+        if body.get("env"):
+            server_config["env"] = body.get("env")
+    else:
+        return {"error": "Invalid transport"}, 400
+
+    try:
+        config = load_server_config()
+        if "mcp" not in config:
+            config["mcp"] = {"tool_cache_ttl": 30, "servers": []}
+        
+        servers = config["mcp"].get("servers", [])
+        existing_idx = next((i for i, s in enumerate(servers) if s.get("id") == server_id), None)
+        
+        if existing_idx is not None:
+            servers[existing_idx] = server_config
+        else:
+            servers.append(server_config)
+        
+        config["mcp"]["servers"] = servers
+        save_server_config(config)
+        
+        # Reinitialize MCP manager
+        global mcp_manager
+        mcp_manager = MCPManager(config.get("mcp", {}))
+        
+        return {"status": "saved", "server_id": server_id}
+    except Exception as exc:
+        logger.exception("[MCP] Failed to save server config")
+        return {"error": str(exc)}, 500
+
+@app.delete("/api/mcp/server/{server_id}")
+async def delete_mcp_server(server_id: str):
+    """Delete MCP server configuration."""
+    try:
+        config = load_server_config()
+        if "mcp" not in config or "servers" not in config["mcp"]:
+            return {"error": "No MCP servers configured"}, 404
+        
+        servers = config["mcp"]["servers"]
+        filtered = [s for s in servers if s.get("id") != server_id]
+        
+        if len(filtered) == len(servers):
+            return {"error": f"Server {server_id} not found"}, 404
+        
+        config["mcp"]["servers"] = filtered
+        save_server_config(config)
+        
+        # Reinitialize MCP manager
+        global mcp_manager
+        mcp_manager = MCPManager(config.get("mcp", {}))
+        
+        return {"status": "deleted", "server_id": server_id}
+    except Exception as exc:
+        logger.exception("[MCP] Failed to delete server")
+        return {"error": str(exc)}, 500
 
 @app.get("/api/agent/memory")
 def get_agent_memory():
@@ -893,10 +1244,11 @@ def get_agent_memory():
 async def validate_config(request: Request):
     """Validate configuration against schema."""
     body = await request.json()
-    config_file = body.get("config_file")  # "server" or "providers"
+    config_file = body.get("config_file")  # "server", "providers", "bitwarden"
     schema_map = {
         "server": "server.schema.json",
-        "providers": "providers.schema.json"
+        "providers": "providers.schema.json",
+        "bitwarden": "bitwarden.schema.json"
     }
     
     if config_file not in schema_map:
@@ -904,8 +1256,10 @@ async def validate_config(request: Request):
     
     # Load the config
     if config_file == "server":
-        with open(PROVIDERS_PATH) as f:  # Note: using providers path as server config
+        with open(CONFIG_PATH) as f:
             config = json.load(f)
+    elif config_file == "bitwarden":
+        config = load_bitwarden_config()
     else:
         with open(PROVIDERS_PATH) as f:
             config = json.load(f)
