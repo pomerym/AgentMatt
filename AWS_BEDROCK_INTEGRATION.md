@@ -66,13 +66,16 @@ Look for:
 
 ## Configuration
 
-Your AWS credentials are stored in `backend/config/providers.json`:
+Keep credentials out of source control. The app supports env var placeholders in
+`backend/config/providers.json` and will resolve them at runtime.
+
 ```json
 {
   "aws_bedrock": {
-    "access_key_id": "AKIA...",
-    "secret_access_key": "...",
-    "region": "ca-central-1",
+    "access_key_id": "${AWS_ACCESS_KEY_ID}",
+    "secret_access_key": "${AWS_SECRET_ACCESS_KEY}",
+    "session_token": "${AWS_SESSION_TOKEN}",
+    "region": "${AWS_DEFAULT_REGION}",
     "model_id": "anthropic.claude-3-sonnet-20240229-v1:0"
   }
 }

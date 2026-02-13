@@ -3,10 +3,10 @@
 ## Quickstart
 
 1. Install dependencies:
-   - Python: fastapi, uvicorn
-   - Run: `pip install fastapi uvicorn`
+   - Create and activate a virtualenv: `python -m venv .venv && source .venv/bin/activate`
+   - Install packages: `pip install fastapi uvicorn boto3 pydantic httpx python-dotenv`
 2. Start backend:
-   - `uvicorn backend.src.main:app --reload`
+   - `uvicorn backend.src.main:app --reload --port 8000`
 
 ## Endpoints
 - /api/chat/start
@@ -23,6 +23,15 @@
 ## Configuration
 - backend/config/server.json
 - backend/config/providers.json
+
+### Environment Variables
+Providers can resolve credentials from env vars when config values are placeholders.
+
+- `COPILOT_API_KEY`
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_SESSION_TOKEN`
+- `AWS_DEFAULT_REGION`
 
 ## Database
 - backend/db/

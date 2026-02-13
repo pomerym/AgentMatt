@@ -3,8 +3,8 @@
 ## Quickstart
 
 1. Install dependencies:
-   - Node.js: react
-   - Run: `npm install react`
+   - Node.js LTS recommended
+   - Run: `cd frontend && npm install`
 2. Start frontend:
    - `npm start` (with react-scripts)
 

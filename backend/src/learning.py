@@ -193,13 +193,15 @@ class MemoryManager:
 
     def update_profile(self, user_id: str) -> Dict[str, Any]:
         """Create a lightweight user profile from memories."""
+        existing = self.user_profiles.get(user_id, {})
         adaptation = self.adapt_based_on_memory(user_id)
         profile = {
             "user_id": user_id,
             "preferences": adaptation.get("preferences", {}),
             "patterns": adaptation.get("patterns", []),
             "memory_count": adaptation.get("memory_count", 0),
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now().isoformat(),
+            "approval_scopes": existing.get("approval_scopes", [])
         }
         self.user_profiles[user_id] = profile
         self._save()
@@ -208,6 +210,27 @@ class MemoryManager:
     def get_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get the current user profile, if any."""
         return self.user_profiles.get(user_id)
+
+    def get_approval_scopes(self, user_id: str) -> List[Dict[str, Any]]:
+        profile = self.user_profiles.get(user_id, {})
+        scopes = profile.get("approval_scopes")
+        return scopes if isinstance(scopes, list) else []
+
+    def add_approval_scope(self, user_id: str, scope: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not scope:
+            return self.get_approval_scopes(user_id)
+        profile = self.user_profiles.get(user_id, {})
+        scopes = profile.get("approval_scopes")
+        scopes = scopes if isinstance(scopes, list) else []
+        if scope not in scopes:
+            scopes.append(scope)
+        profile["approval_scopes"] = scopes
+        if "user_id" not in profile:
+            profile["user_id"] = user_id
+        profile["updated_at"] = datetime.now().isoformat()
+        self.user_profiles[user_id] = profile
+        self._save()
+        return scopes
 
     def get_latest_summary(self, user_id: str, session_id: Optional[str] = None) -> Optional[Memory]:
         """Get the most recent summary memory for a user (optionally per session)."""
