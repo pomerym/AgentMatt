@@ -3,6 +3,21 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 
+// API Key from environment or localStorage for development
+const API_KEY = process.env.REACT_APP_API_KEY || localStorage.getItem('agentmatt_api_key') || 'dev-key-insecure-change-in-production';
+
+// Helper to add API key to fetch headers
+function createFetchOptions(options = {}) {
+  return {
+    ...options,
+    headers: {
+      'X-API-Key': API_KEY,
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  };
+}
+
 function ChatApp() {
   const [sessionId, setSessionId] = useState(null);
   const [sessions, setSessions] = useState([]);
@@ -86,7 +101,7 @@ function ChatApp() {
 
   useEffect(() => {
     // Fetch provider list
-    fetch('/api/provider/list')
+    fetch('/api/provider/list', createFetchOptions())
       .then(r => {
         if (!r.ok) throw new Error(`Provider list failed: ${r.status}`);
         return r.json();
@@ -98,7 +113,7 @@ function ChatApp() {
       .catch(e => console.error('Error fetching providers:', e));
 
     // Fetch plugins
-    fetch('/api/plugins')
+    fetch('/api/plugins', createFetchOptions())
       .then(r => {
         if (!r.ok) throw new Error(`Plugins failed: ${r.status}`);
         return r.json();
@@ -110,7 +125,7 @@ function ChatApp() {
     fetchMcpServers();
 
     // Fetch MCP tools (summary view)
-    fetch('/api/mcp/tools?summary=true')
+    fetch('/api/mcp/tools?summary=true', createFetchOptions())
       .then(r => {
         if (!r.ok) throw new Error(`MCP tools failed: ${r.status}`);
         return r.json();
@@ -119,7 +134,7 @@ function ChatApp() {
       .catch(e => console.error('Error fetching MCP tools:', e));
 
     // Fetch provider config
-    fetch('/api/provider/config')
+    fetch('/api/provider/config', createFetchOptions())
       .then(r => {
         if (!r.ok) throw new Error(`Config failed: ${r.status}`);
         return r.json();
@@ -132,7 +147,7 @@ function ChatApp() {
       .catch(e => console.error('Error fetching config:', e));
 
     // Fetch Bedrock models
-    fetch('/api/provider/bedrock/models')
+    fetch('/api/provider/bedrock/models', createFetchOptions())
       .then(r => {
         if (!r.ok) throw new Error(`Models failed: ${r.status}`);
         return r.json();
@@ -144,7 +159,7 @@ function ChatApp() {
       .catch(e => console.error('Error fetching models:', e));
 
     // Fetch Bedrock regions
-    fetch('/api/provider/bedrock/regions')
+    fetch('/api/provider/bedrock/regions', createFetchOptions())
       .then(r => {
         if (!r.ok) throw new Error(`Regions failed: ${r.status}`);
         return r.json();
@@ -160,7 +175,7 @@ function ChatApp() {
   useEffect(() => {
     const loadSessions = async () => {
       try {
-        const res = await fetch('/api/chat/sessions');
+        const res = await fetch('/api/chat/sessions', createFetchOptions());
         if (!res.ok) throw new Error(`Sessions failed: ${res.status}`);
         const data = await res.json();
         const existing = data.sessions || [];
@@ -237,11 +252,10 @@ function ChatApp() {
       const payload = { provider_id: 'aws_bedrock', config: bedrockConfig };
       console.log('[AWS Bedrock] Request payload:', JSON.stringify(payload, null, 2));
       
-      const res = await fetch('/api/provider/config', {
+      const res = await fetch('/api/provider/config', createFetchOptions({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-      });
+      }));
       
       console.log('[AWS Bedrock] Response status:', res.status, res.statusText);
       
@@ -280,7 +294,7 @@ function ChatApp() {
   const startSession = async () => {
     console.log('[Session] Starting new session');
     try {
-      const res = await fetch('/api/chat/start', { method: 'POST' });
+      const res = await fetch('/api/chat/start', createFetchOptions({ method: 'POST' }));
       console.log('[Session] Start response status:', res.status);
       
       const data = await res.json();
@@ -344,7 +358,7 @@ function ChatApp() {
 
   const fetchMcpServers = async () => {
     try {
-      const res = await fetch('/api/mcp/servers');
+      const res = await fetch('/api/mcp/servers', createFetchOptions());
       if (!res.ok) throw new Error(`MCP servers failed: ${res.status}`);
       const data = await res.json();
       setMcpServers(data.servers || []);
@@ -414,11 +428,10 @@ function ChatApp() {
         }
       }
 
-      const res = await fetch('/api/mcp/server', {
+      const res = await fetch('/api/mcp/server', createFetchOptions({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-      });
+      }));
       const data = await res.json();
       if (!res.ok) {
         alert(data.error || 'Failed to save MCP server');
@@ -428,7 +441,7 @@ function ChatApp() {
       setMcpEditMode(false);
       fetchMcpServers();
       setTimeout(() => {
-        fetch('/api/mcp/tools?summary=true')
+        fetch('/api/mcp/tools?summary=true', createFetchOptions())
           .then(r => r.json())
           .then(d => setMcpTools(d.servers || []));
       }, 500);
@@ -440,7 +453,7 @@ function ChatApp() {
   const deleteMcpServer = async (serverId) => {
     if (!window.confirm(`Delete MCP server "${serverId}"?`)) return;
     try {
-      const res = await fetch(`/api/mcp/server/${serverId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/mcp/server/${serverId}`, createFetchOptions({ method: 'DELETE' }));
       const data = await res.json();
       if (!res.ok) {
         alert(data.error || 'Failed to delete MCP server');
@@ -448,7 +461,7 @@ function ChatApp() {
       }
       fetchMcpServers();
       setTimeout(() => {
-        fetch('/api/mcp/tools?summary=true')
+        fetch('/api/mcp/tools?summary=true', createFetchOptions())
           .then(r => r.json())
           .then(d => setMcpTools(d.servers || []));
       }, 500);
