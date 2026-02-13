@@ -11,6 +11,22 @@ function ChatApp() {
   const [provider, setProvider] = useState('copilot');
   const [providers, setProviders] = useState([]);
   const [plugins, setPlugins] = useState([]);
+  const [mcpServers, setMcpServers] = useState([]);
+  const [mcpTools, setMcpTools] = useState([]);
+  const [mcpEditMode, setMcpEditMode] = useState(false);
+  const [mcpEditServer, setMcpEditServer] = useState(null);
+  const [mcpFormData, setMcpFormData] = useState({
+    id: '',
+    name: '',
+    transport: 'http',
+    url: '',
+    command: '',
+    args: '',
+    cwd: '',
+    env: '',
+    headers: '',
+    verify_ssl: true
+  });
   const [showSettings, setShowSettings] = useState(false);
   
   // AWS Bedrock configuration state
@@ -36,6 +52,7 @@ function ChatApp() {
   const [pendingApproval, setPendingApproval] = useState(false);
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [expandedOutputs, setExpandedOutputs] = useState({});
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
 
@@ -88,6 +105,18 @@ function ChatApp() {
       })
       .then(d => setPlugins(d.plugins || []))
       .catch(e => console.error('Error fetching plugins:', e));
+
+    // Fetch MCP servers
+    fetchMcpServers();
+
+    // Fetch MCP tools
+    fetch('/api/mcp/tools')
+      .then(r => {
+        if (!r.ok) throw new Error(`MCP tools failed: ${r.status}`);
+        return r.json();
+      })
+      .then(d => setMcpTools(d.tools || []))
+      .catch(e => console.error('Error fetching MCP tools:', e));
 
     // Fetch provider config
     fetch('/api/provider/config')
@@ -188,6 +217,17 @@ function ChatApp() {
     messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
   };
 
+  const isCommandOutput = (msg) => {
+    if (msg.sender !== 'assistant' || typeof msg.content !== 'string') return false;
+    const trimmed = msg.content.trimStart();
+    if (!trimmed.startsWith('$ ')) return false;
+    return trimmed.includes('\n');
+  };
+
+  const toggleOutput = (key) => {
+    setExpandedOutputs(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
   const saveBedrockConfig = async () => {
     setSaveStatus('saving');
     setSaveError(null);
@@ -274,6 +314,146 @@ function ChatApp() {
       console.error('[Session] Exception while starting session:', e.message);
       console.error('[Session] Full error:', e);
       setMessageError('Failed to start session: ' + (e.message || 'Network error'));
+    }
+  };
+
+  const renameSession = async (id) => {
+    const currentName = sessions.find(s => s.id === id)?.name || '';
+    const nextNameRaw = window.prompt('Rename session', currentName);
+    if (nextNameRaw === null) return;
+    const nextName = nextNameRaw.trim();
+    if (!nextName) return;
+
+    try {
+      const res = await fetch(`/api/chat/${id}/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: nextName })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMessageError(data.error || data.message || 'Failed to rename session');
+        return;
+      }
+
+      setSessions(prev => prev.map(s => (s.id === id ? { ...s, name: nextName } : s)));
+    } catch (e) {
+      setMessageError('Failed to rename session: ' + (e.message || 'Network error'));
+    }
+  };
+
+  const fetchMcpServers = async () => {
+    try {
+      const res = await fetch('/api/mcp/servers');
+      if (!res.ok) throw new Error(`MCP servers failed: ${res.status}`);
+      const data = await res.json();
+      setMcpServers(data.servers || []);
+    } catch (e) {
+      console.error('Error fetching MCP servers:', e);
+    }
+  };
+
+  const openMcpAddForm = () => {
+    setMcpFormData({
+      id: '',
+      name: '',
+      transport: 'http',
+      url: '',
+      command: '',
+      args: '',
+      cwd: '',
+      env: '',
+      headers: '',
+      verify_ssl: true
+    });
+    setMcpEditServer(null);
+    setMcpEditMode(true);
+  };
+
+  const openMcpEditForm = (server) => {
+    setMcpFormData({
+      id: server.id || '',
+      name: server.name || '',
+      transport: server.transport || 'http',
+      url: server.url || '',
+      command: server.command || '',
+      args: (server.args || []).join(' '),
+      cwd: server.cwd || '',
+      env: JSON.stringify(server.env || {}, null, 2),
+      headers: JSON.stringify(server.headers || {}, null, 2),
+      verify_ssl: server.verify_ssl !== undefined ? server.verify_ssl : true
+    });
+    setMcpEditServer(server.id);
+    setMcpEditMode(true);
+  };
+
+  const saveMcpServer = async () => {
+    try {
+      const payload = {
+        id: mcpFormData.id.trim(),
+        name: mcpFormData.name.trim(),
+        transport: mcpFormData.transport
+      };
+
+      if (mcpFormData.transport === 'http') {
+        payload.url = mcpFormData.url.trim();
+        payload.verify_ssl = mcpFormData.verify_ssl;
+        if (mcpFormData.headers) {
+          payload.headers = JSON.parse(mcpFormData.headers);
+        }
+      } else {
+        payload.command = mcpFormData.command.trim();
+        if (mcpFormData.args) {
+          payload.args = mcpFormData.args.split(/\s+/).filter(Boolean);
+        }
+        if (mcpFormData.cwd) {
+          payload.cwd = mcpFormData.cwd.trim();
+        }
+        if (mcpFormData.env) {
+          payload.env = JSON.parse(mcpFormData.env);
+        }
+      }
+
+      const res = await fetch('/api/mcp/server', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Failed to save MCP server');
+        return;
+      }
+
+      setMcpEditMode(false);
+      fetchMcpServers();
+      setTimeout(() => {
+        fetch('/api/mcp/tools')
+          .then(r => r.json())
+          .then(d => setMcpTools(d.tools || []));
+      }, 500);
+    } catch (e) {
+      alert('Failed to save MCP server: ' + (e.message || 'Invalid JSON'));
+    }
+  };
+
+  const deleteMcpServer = async (serverId) => {
+    if (!window.confirm(`Delete MCP server "${serverId}"?`)) return;
+    try {
+      const res = await fetch(`/api/mcp/server/${serverId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Failed to delete MCP server');
+        return;
+      }
+      fetchMcpServers();
+      setTimeout(() => {
+        fetch('/api/mcp/tools')
+          .then(r => r.json())
+          .then(d => setMcpTools(d.tools || []));
+      }, 500);
+    } catch (e) {
+      alert('Failed to delete MCP server: ' + e.message);
     }
   };
 
@@ -471,24 +651,44 @@ function ChatApp() {
               }}
             >
               <span>{s.name}</span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeSession(s.id);
-                }}
-                title="Close session"
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: '#b3d1ff',
-                  fontSize: '0.95rem',
-                  cursor: 'pointer',
-                  opacity: hoveredSessionId === s.id ? 1 : 0,
-                  transition: 'opacity 0.15s ease'
-                }}
-              >
-                ✕
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    renameSession(s.id);
+                  }}
+                  title="Rename session"
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#b3d1ff',
+                    fontSize: '0.95rem',
+                    cursor: 'pointer',
+                    opacity: hoveredSessionId === s.id ? 1 : 0.75,
+                    transition: 'opacity 0.15s ease'
+                  }}
+                >
+                  ✎
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeSession(s.id);
+                  }}
+                  title="Close session"
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#b3d1ff',
+                    fontSize: '0.95rem',
+                    cursor: 'pointer',
+                    opacity: hoveredSessionId === s.id ? 1 : 0.75,
+                    transition: 'opacity 0.15s ease'
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -516,6 +716,31 @@ function ChatApp() {
           {plugins.map(p => (
             <div key={p.name} style={{ color: '#b3d1ff', fontSize: '0.9rem', marginBottom: 4 }}>{p.name} <span style={{ color: '#6b7a99' }}>v{p.version}</span></div>
           ))}
+        </div>
+        <div style={{ padding: '1rem', borderTop: '1px solid #233a5e' }}>
+          <div style={{ fontSize: '0.85rem', color: '#42a5f5', marginBottom: 8 }}>Tools</div>
+          {mcpServers.length === 0 && (
+            <div style={{ color: '#6b7a99', fontSize: '0.9rem' }}>
+              No MCP servers configured
+            </div>
+          )}
+          {mcpServers.length > 0 && mcpTools.length === 0 && (
+            <div style={{ color: '#6b7a99', fontSize: '0.9rem' }}>
+              No MCP tools available
+            </div>
+          )}
+          {mcpTools.map(tool => (
+            <div
+              key={`${tool.server_id}-${tool.name}`}
+              style={{ color: '#b3d1ff', fontSize: '0.88rem', marginBottom: 6 }}
+            >
+              {tool.server_id}/{tool.name}
+              {tool.description ? <span style={{ color: '#6b7a99' }}> - {tool.description}</span> : null}
+            </div>
+          ))}
+          <div style={{ color: '#6b7a99', fontSize: '0.82rem', marginTop: 6 }}>
+            Use /mcp list or /mcp &lt;server&gt; &lt;tool&gt; {"{...}"}
+          </div>
         </div>
         <div style={{ padding: '1rem', borderTop: '1px solid #233a5e' }}>
           <button
@@ -574,12 +799,46 @@ function ChatApp() {
               fontWeight: msg.sender === 'user' ? 600 : 400,
               boxShadow: '0 2px 8px #0d47a122'
             }}>
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkBreaks]}
-                components={markdownComponents}
-              >
-                {msg.content}
-              </ReactMarkdown>
+              {isCommandOutput(msg) ? (() => {
+                const key = msg.id || idx;
+                const expanded = Boolean(expandedOutputs[key]);
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                      <span style={{ color: '#90caf9', fontSize: '0.85rem' }}>
+                        Command output hidden
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => toggleOutput(key)}
+                        style={{
+                          background: 'transparent',
+                          border: '1px solid #3b527a',
+                          color: '#b3d1ff',
+                          borderRadius: 6,
+                          padding: '0.2rem 0.5rem',
+                          fontSize: '0.8rem',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {expanded ? 'Hide output' : 'Show output'}
+                      </button>
+                    </div>
+                    {expanded && (
+                      <pre style={{ background: '#0d1a2f', padding: '0.6rem', borderRadius: 6, overflowX: 'auto', margin: 0 }}>
+                        <code>{msg.content}</code>
+                      </pre>
+                    )}
+                  </div>
+                );
+              })() : (
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm, remarkBreaks]}
+                  components={markdownComponents}
+                >
+                  {msg.content}
+                </ReactMarkdown>
+              )}
             </div>
           ))}
           {isSending && (
@@ -811,6 +1070,20 @@ function ChatApp() {
               }}
             >
               AI Providers
+            </button>
+            <button
+              onClick={() => setSettingsTab('mcp')}
+              style={{
+                padding: '0.5rem 1rem',
+                borderRadius: 6,
+                border: 'none',
+                background: settingsTab === 'mcp' ? '#0d47a1' : 'transparent',
+                color: 'white',
+                cursor: 'pointer',
+                fontWeight: settingsTab === 'mcp' ? 600 : 400
+              }}
+            >
+              MCP Servers
             </button>
           </div>
 
@@ -1142,6 +1415,343 @@ function ChatApp() {
                   <li>Google Vertex AI</li>
                 </ul>
               </div>
+            </>
+          )}
+
+          {/* MCP Servers Tab */}
+          {settingsTab === 'mcp' && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <h4 style={{ margin: 0, color: '#42a5f5' }}>MCP Servers</h4>
+                <button
+                  onClick={openMcpAddForm}
+                  style={{
+                    padding: '0.4rem 0.8rem',
+                    borderRadius: 6,
+                    border: 'none',
+                    background: '#0d47a1',
+                    color: 'white',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    fontSize: '0.85rem'
+                  }}
+                >
+                  + Add Server
+                </button>
+              </div>
+
+              {!mcpEditMode && mcpServers.length === 0 && (
+                <div style={{ color: '#6b7a99', fontSize: '0.9rem', textAlign: 'center', padding: '2rem' }}>
+                  No MCP servers configured. Click "+ Add Server" to get started.
+                </div>
+              )}
+
+              {!mcpEditMode && mcpServers.map(server => (
+                <div
+                  key={server.id}
+                  style={{
+                    background: '#1a2740',
+                    borderRadius: 8,
+                    padding: '1rem',
+                    border: '1px solid #233a5e',
+                    marginBottom: 12
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <div>
+                      <div style={{ color: 'white', fontWeight: 600, fontSize: '0.95rem' }}>{server.name || server.id}</div>
+                      <div style={{ color: '#6b7a99', fontSize: '0.8rem' }}>{server.transport} · {server.url || server.command}</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button
+                        onClick={() => openMcpEditForm(server)}
+                        style={{
+                          padding: '0.3rem 0.6rem',
+                          borderRadius: 4,
+                          border: '1px solid #1565c0',
+                          background: 'transparent',
+                          color: '#90caf9',
+                          cursor: 'pointer',
+                          fontSize: '0.8rem'
+                        }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => deleteMcpServer(server.id)}
+                        style={{
+                          padding: '0.3rem 0.6rem',
+                          borderRadius: 4,
+                          border: '1px solid #c62828',
+                          background: 'transparent',
+                          color: '#ef9a9a',
+                          cursor: 'pointer',
+                          fontSize: '0.8rem'
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {mcpEditMode && (
+                <div style={{
+                  background: '#1a2740',
+                  borderRadius: 8,
+                  padding: '1rem',
+                  border: '1px solid #233a5e'
+                }}>
+                  <h4 style={{ margin: '0 0 12px 0', color: '#42a5f5' }}>
+                    {mcpEditServer ? 'Edit Server' : 'Add Server'}
+                  </h4>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div>
+                      <label style={{ fontSize: '0.8rem', color: '#90caf9', display: 'block', marginBottom: 4 }}>Server ID *</label>
+                      <input
+                        type="text"
+                        value={mcpFormData.id}
+                        onChange={e => setMcpFormData({ ...mcpFormData, id: e.target.value })}
+                        disabled={!!mcpEditServer}
+                        placeholder="splunk_dev"
+                        style={{
+                          width: '100%',
+                          padding: '0.5rem',
+                          borderRadius: 6,
+                          border: '1px solid #233a5e',
+                          background: '#102040',
+                          color: 'white',
+                          boxSizing: 'border-box'
+                        }}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ fontSize: '0.8rem', color: '#90caf9', display: 'block', marginBottom: 4 }}>Name</label>
+                      <input
+                        type="text"
+                        value={mcpFormData.name}
+                        onChange={e => setMcpFormData({ ...mcpFormData, name: e.target.value })}
+                        placeholder="Splunk DEV"
+                        style={{
+                          width: '100%',
+                          padding: '0.5rem',
+                          borderRadius: 6,
+                          border: '1px solid #233a5e',
+                          background: '#102040',
+                          color: 'white',
+                          boxSizing: 'border-box'
+                        }}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ fontSize: '0.8rem', color: '#90caf9', display: 'block', marginBottom: 4 }}>Transport *</label>
+                      <select
+                        value={mcpFormData.transport}
+                        onChange={e => setMcpFormData({ ...mcpFormData, transport: e.target.value })}
+                        style={{
+                          width: '100%',
+                          padding: '0.5rem',
+                          borderRadius: 6,
+                          border: '1px solid #233a5e',
+                          background: '#102040',
+                          color: 'white',
+                          boxSizing: 'border-box'
+                        }}
+                      >
+                        <option value="http">HTTP</option>
+                        <option value="stdio">stdio</option>
+                      </select>
+                    </div>
+
+                    {mcpFormData.transport === 'http' && (
+                      <>
+                        <div>
+                          <label style={{ fontSize: '0.8rem', color: '#90caf9', display: 'block', marginBottom: 4 }}>URL *</label>
+                          <input
+                            type="text"
+                            value={mcpFormData.url}
+                            onChange={e => setMcpFormData({ ...mcpFormData, url: e.target.value })}
+                            placeholder="https://my-server.com/mcp"
+                            style={{
+                              width: '100%',
+                              padding: '0.5rem',
+                              borderRadius: 6,
+                              border: '1px solid #233a5e',
+                              background: '#102040',
+                              color: 'white',
+                              boxSizing: 'border-box'
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: '0.8rem', color: '#90caf9', display: 'block', marginBottom: 4 }}>Headers (JSON)</label>
+                          <textarea
+                            value={mcpFormData.headers}
+                            onChange={e => setMcpFormData({ ...mcpFormData, headers: e.target.value })}
+                            placeholder='{"Authorization": "bw://Splunk DEV MPC/password"}'
+                            rows={3}
+                            style={{
+                              width: '100%',
+                              padding: '0.5rem',
+                              borderRadius: 6,
+                              border: '1px solid #233a5e',
+                              background: '#102040',
+                              color: 'white',
+                              fontFamily: 'monospace',
+                              fontSize: '0.85rem',
+                              boxSizing: 'border-box'
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <input
+                            type="checkbox"
+                            id="verify-ssl"
+                            checked={mcpFormData.verify_ssl}
+                            onChange={e => setMcpFormData({ ...mcpFormData, verify_ssl: e.target.checked })}
+                            style={{
+                              width: '1rem',
+                              height: '1rem',
+                              cursor: 'pointer'
+                            }}
+                          />
+                          <label htmlFor="verify-ssl" style={{ fontSize: '0.8rem', color: '#90caf9', cursor: 'pointer' }}>
+                            Verify SSL certificate (uncheck for self-signed certs)
+                          </label>
+                        </div>
+                      </>
+                    )}
+
+                    {mcpFormData.transport === 'stdio' && (
+                      <>
+                        <div>
+                          <label style={{ fontSize: '0.8rem', color: '#90caf9', display: 'block', marginBottom: 4 }}>Command *</label>
+                          <input
+                            type="text"
+                            value={mcpFormData.command}
+                            onChange={e => setMcpFormData({ ...mcpFormData, command: e.target.value })}
+                            placeholder="python"
+                            style={{
+                              width: '100%',
+                              padding: '0.5rem',
+                              borderRadius: 6,
+                              border: '1px solid #233a5e',
+                              background: '#102040',
+                              color: 'white',
+                              boxSizing: 'border-box'
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: '0.8rem', color: '#90caf9', display: 'block', marginBottom: 4 }}>Args (space-separated)</label>
+                          <input
+                            type="text"
+                            value={mcpFormData.args}
+                            onChange={e => setMcpFormData({ ...mcpFormData, args: e.target.value })}
+                            placeholder="-m my_mcp_server"
+                            style={{
+                              width: '100%',
+                              padding: '0.5rem',
+                              borderRadius: 6,
+                              border: '1px solid #233a5e',
+                              background: '#102040',
+                              color: 'white',
+                              boxSizing: 'border-box'
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: '0.8rem', color: '#90caf9', display: 'block', marginBottom: 4 }}>CWD</label>
+                          <input
+                            type="text"
+                            value={mcpFormData.cwd}
+                            onChange={e => setMcpFormData({ ...mcpFormData, cwd: e.target.value })}
+                            placeholder="/path/to/working/dir"
+                            style={{
+                              width: '100%',
+                              padding: '0.5rem',
+                              borderRadius: 6,
+                              border: '1px solid #233a5e',
+                              background: '#102040',
+                              color: 'white',
+                              boxSizing: 'border-box'
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: '0.8rem', color: '#90caf9', display: 'block', marginBottom: 4 }}>Env (JSON)</label>
+                          <textarea
+                            value={mcpFormData.env}
+                            onChange={e => setMcpFormData({ ...mcpFormData, env: e.target.value })}
+                            placeholder='{"MY_VAR": "value"}'
+                            rows={3}
+                            style={{
+                              width: '100%',
+                              padding: '0.5rem',
+                              borderRadius: 6,
+                              border: '1px solid #233a5e',
+                              background: '#102040',
+                              color: 'white',
+                              fontFamily: 'monospace',
+                              fontSize: '0.85rem',
+                              boxSizing: 'border-box'
+                            }}
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                      <button
+                        onClick={saveMcpServer}
+                        style={{
+                          flex: 1,
+                          padding: '0.6rem 1rem',
+                          borderRadius: 6,
+                          border: 'none',
+                          background: '#0d47a1',
+                          color: 'white',
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setMcpEditMode(false)}
+                        style={{
+                          flex: 1,
+                          padding: '0.6rem 1rem',
+                          borderRadius: 6,
+                          border: '1px solid #233a5e',
+                          background: 'transparent',
+                          color: '#b3d1ff',
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{
+                    marginTop: 12,
+                    padding: '0.75rem',
+                    background: '#0d1a2f',
+                    borderRadius: 6,
+                    border: '1px dashed #233a5e',
+                    fontSize: '0.8rem',
+                    color: '#90caf9'
+                  }}>
+                    <strong>Tip:</strong> Use Bitwarden references like <code style={{ background: '#102040', padding: '0.1rem 0.4rem', borderRadius: 3 }}>bw://ItemName/field</code> for secrets
+                  </div>
+                </div>
+              )}
             </>
           )}
         </aside>

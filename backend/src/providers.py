@@ -10,17 +10,13 @@ import os
 import json
 import logging
 
+from .secret_resolver import resolve_secret_value
+
 logger = logging.getLogger(__name__)
 
 
 def _resolve_env_value(value: Optional[str]) -> Optional[str]:
-    if not isinstance(value, str):
-        return value
-    trimmed = value.strip()
-    if trimmed.startswith("${") and trimmed.endswith("}"):
-        env_key = trimmed[2:-1].strip()
-        return os.getenv(env_key)
-    return value
+    return resolve_secret_value(value)
 
 # Try to import boto3 for AWS Bedrock support
 try:
