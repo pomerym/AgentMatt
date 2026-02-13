@@ -1,0 +1,6 @@
+{
+  "name": "sample_plugin",
+  "version": "1.0.0",
+  "description": "Sample Agno-compatible plugin for testing plugin loader",
+  "entry_point": "main.py"
+}

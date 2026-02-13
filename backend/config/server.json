@@ -1,0 +1,6 @@
+{
+  "host": "localhost",
+  "port": 8000,
+  "database": "agno_agent.db",
+  "log_level": "info"
+}
