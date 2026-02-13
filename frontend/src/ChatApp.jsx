@@ -109,13 +109,13 @@ function ChatApp() {
     // Fetch MCP servers
     fetchMcpServers();
 
-    // Fetch MCP tools
-    fetch('/api/mcp/tools')
+    // Fetch MCP tools (summary view)
+    fetch('/api/mcp/tools?summary=true')
       .then(r => {
         if (!r.ok) throw new Error(`MCP tools failed: ${r.status}`);
         return r.json();
       })
-      .then(d => setMcpTools(d.tools || []))
+      .then(d => setMcpTools(d.servers || []))
       .catch(e => console.error('Error fetching MCP tools:', e));
 
     // Fetch provider config
@@ -428,9 +428,9 @@ function ChatApp() {
       setMcpEditMode(false);
       fetchMcpServers();
       setTimeout(() => {
-        fetch('/api/mcp/tools')
+        fetch('/api/mcp/tools?summary=true')
           .then(r => r.json())
-          .then(d => setMcpTools(d.tools || []));
+          .then(d => setMcpTools(d.servers || []));
       }, 500);
     } catch (e) {
       alert('Failed to save MCP server: ' + (e.message || 'Invalid JSON'));
@@ -448,9 +448,9 @@ function ChatApp() {
       }
       fetchMcpServers();
       setTimeout(() => {
-        fetch('/api/mcp/tools')
+        fetch('/api/mcp/tools?summary=true')
           .then(r => r.json())
-          .then(d => setMcpTools(d.tools || []));
+          .then(d => setMcpTools(d.servers || []));
       }, 500);
     } catch (e) {
       alert('Failed to delete MCP server: ' + e.message);
@@ -729,13 +729,13 @@ function ChatApp() {
               No MCP tools available
             </div>
           )}
-          {mcpTools.map(tool => (
+          {mcpTools.map(server => (
             <div
-              key={`${tool.server_id}-${tool.name}`}
+              key={server.server_id}
               style={{ color: '#b3d1ff', fontSize: '0.88rem', marginBottom: 6 }}
             >
-              {tool.server_id}/{tool.name}
-              {tool.description ? <span style={{ color: '#6b7a99' }}> - {tool.description}</span> : null}
+              {server.server_id}: {server.tool_count} tool{server.tool_count !== 1 ? 's' : ''}
+              {server.error ? <span style={{ color: '#ff6b6b' }}> - {server.error}</span> : null}
             </div>
           ))}
           <div style={{ color: '#6b7a99', fontSize: '0.82rem', marginTop: 6 }}>

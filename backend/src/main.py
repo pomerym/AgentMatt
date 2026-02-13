@@ -1154,8 +1154,34 @@ def list_mcp_servers():
     return {"servers": mcp_manager.list_servers()}
 
 @app.get("/api/mcp/tools")
-def list_mcp_tools():
-    return {"tools": mcp_manager.list_tools()}
+def list_mcp_tools(summary: bool = False):
+    """List MCP tools.
+    
+    Args:
+        summary: If True, return only configured servers and tool counts (less noisy).
+                If False, return all tools with full descriptions.
+    """
+    if summary:
+        # Return a compact summary view grouped by server
+        servers_summary = []
+        for server_id in mcp_manager.servers.keys():
+            try:
+                tools = mcp_manager.list_tools(server_id)
+                servers_summary.append({
+                    "server_id": server_id,
+                    "tool_count": len(tools),
+                    "tools": [{"name": t["name"]} for t in tools[:3]]  # Show first 3 tools as preview
+                })
+            except Exception as e:
+                servers_summary.append({
+                    "server_id": server_id,
+                    "tool_count": 0,
+                    "error": str(e)
+                })
+        return {"servers": servers_summary}
+    else:
+        # Return full detailed tools list (original behavior)
+        return {"tools": mcp_manager.list_tools()}
 
 @app.post("/api/mcp/call")
 async def call_mcp_tool(request: Request):
