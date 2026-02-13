@@ -89,7 +89,9 @@ def load_bitwarden_config():
 
 def initialize_bitwarden():
     config = load_bitwarden_config()
+    logger.info(f"[BITWARDEN] Config loaded: enabled={config.get('enabled')}, has_base_url={bool(config.get('base_url'))}")
     if not config or not config.get("enabled"):
+        logger.info("[BITWARDEN] Bitwarden disabled or missing config")
         configure_bitwarden(None)
         return
 
@@ -99,12 +101,16 @@ def initialize_bitwarden():
         configure_bitwarden(None)
         return
 
+    logger.info(f"[BITWARDEN] Initializing with base_url: {base_url}")
     client = BitwardenClient(
         base_url=base_url,
         cache_ttl=int(config.get("cache_ttl", 30)),
         timeout=int(config.get("timeout", 10))
     )
-    configure_bitwarden(client, config.get("aliases", {}))
+    aliases = config.get("aliases", {})
+    logger.info(f"[BITWARDEN] Configured {len(aliases)} aliases")
+    configure_bitwarden(client, aliases)
+    logger.info("[BITWARDEN] Bitwarden client initialized successfully")
 
 def save_providers_config(config):
     with open(PROVIDERS_PATH, 'w') as f:
@@ -468,14 +474,17 @@ def _send_to_provider(session_id: str, session, message_content: str) -> dict:
         content = msg.get("content", "")
         if content:
             # Resolve any Bitwarden credential references in history
+            logger.debug(f"[CHAT MESSAGE] Processing history message, original length: {len(content)}")
             resolved_content = resolve_secret_value(content)
+            logger.debug(f"[CHAT MESSAGE] Resolved history, new length: {len(resolved_content)}, changed={content != resolved_content}")
             history_for_provider.append({"role": role, "content": resolved_content})
 
     try:
         # Resolve any Bitwarden credential references in the current message
+        logger.info(f"[CHAT MESSAGE] Current message (original): {message_content[:100] if len(message_content) > 100 else message_content}")
         resolved_message = resolve_secret_value(message_content)
-        
-        logger.info(f"[CHAT MESSAGE] Resolved message with credentials: {resolved_message[:100] if resolved_message else 'None'}")
+        logger.info(f"[CHAT MESSAGE] Current message (resolved): {resolved_message[:100] if len(resolved_message) > 100 else resolved_message}")
+        logger.info(f"[CHAT MESSAGE] Message changed: {message_content != resolved_message}")
         logger.info(f"[CHAT MESSAGE] Sending message to {provider.name} provider")
         ai_response = provider.send_message(
             resolved_message,
