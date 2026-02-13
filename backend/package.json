@@ -1,0 +1,12 @@
+{
+  "name": "agno-agent-backend",
+  "version": "1.0.0",
+  "main": "src/main.py",
+  "scripts": {
+    "start": "uvicorn backend.src.main:app --reload"
+  },
+  "dependencies": {
+    "fastapi": "*",
+    "uvicorn": "*"
+  }
+}
