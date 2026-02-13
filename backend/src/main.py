@@ -467,12 +467,15 @@ def _send_to_provider(session_id: str, session, message_content: str) -> dict:
         role = "assistant" if msg.get("sender") == "assistant" else "user"
         content = msg.get("content", "")
         if content:
-            history_for_provider.append({"role": role, "content": content})
+            # Resolve any Bitwarden credential references in history
+            resolved_content = resolve_secret_value(content)
+            history_for_provider.append({"role": role, "content": resolved_content})
 
     try:
-        # Resolve any Bitwarden credential references in the message
+        # Resolve any Bitwarden credential references in the current message
         resolved_message = resolve_secret_value(message_content)
         
+        logger.info(f"[CHAT MESSAGE] Resolved message with credentials: {resolved_message[:100] if resolved_message else 'None'}")
         logger.info(f"[CHAT MESSAGE] Sending message to {provider.name} provider")
         ai_response = provider.send_message(
             resolved_message,
