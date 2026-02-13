@@ -155,7 +155,7 @@ def extract_shell_commands(text: str) -> list[str]:
         stripped = line.strip()
         if stripped.startswith("$ "):
             cmd = stripped.lstrip("$").strip()
-            if cmd:
+            if cmd and not _is_url(cmd):
                 commands.append(cmd)
 
     fenced = re.findall(r"```(bash|sh|shell)?\n([\s\S]*?)```", text, re.IGNORECASE)
@@ -167,6 +167,13 @@ def extract_shell_commands(text: str) -> list[str]:
             if stripped and not stripped.startswith("#"):
                 if stripped.startswith("$"):
                     stripped = stripped.lstrip("$").strip()
-                commands.append(stripped)
+                # Skip URLs
+                if not _is_url(stripped):
+                    commands.append(stripped)
 
     return commands
+
+
+def _is_url(text: str) -> bool:
+    """Check if text looks like a URL rather than a shell command."""
+    return text.startswith(("http://", "https://", "ftp://", "file://"))

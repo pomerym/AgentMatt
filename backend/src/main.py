@@ -545,6 +545,9 @@ def _send_to_provider(session_id: str, session, message_content: str) -> dict:
 
         suggested_commands = extract_shell_commands(ai_response or "")
         if suggested_commands:
+            logger.info(f"[CHAT MESSAGE] Extracted {len(suggested_commands)} suggested command(s) from AI response")
+            for cmd in suggested_commands:
+                logger.debug(f"[CHAT MESSAGE] Extracted command: {cmd}")
             pending_queue = session.settings.get("pending_commands") or []
             for cmd in suggested_commands:
                 pending_queue.append({"type": "shell", "command": cmd, "action_type": "command"})
