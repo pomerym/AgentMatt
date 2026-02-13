@@ -65,21 +65,25 @@ class BitwardenClient:
         return item
 
     def get_field_value(self, item: Dict[str, Any], field: str) -> Optional[str]:
-        if field == "notes":
+        # Make field matching case-insensitive
+        field_lower = field.lower()
+        
+        if field_lower == "notes":
             return item.get("notes")
 
         login = item.get("login") or {}
-        if field == "username":
+        if field_lower == "username":
             return login.get("username")
-        if field == "password":
+        if field_lower == "password":
             return login.get("password")
-        if field == "uri":
+        if field_lower == "uri":
             uris = login.get("uris") or []
             if uris:
                 return uris[0].get("uri")
 
+        # Also try case-insensitive matching for custom fields
         for entry in item.get("fields", []) or []:
-            if entry.get("name") == field:
+            if entry.get("name", "").lower() == field_lower:
                 return entry.get("value")
 
         return None
