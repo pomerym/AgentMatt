@@ -315,7 +315,7 @@ function ChatApp() {
       
       // Fetch initial history
       console.log('[Session] Fetching initial history for', newSessionId);
-      const histRes = await fetch(`/api/chat/${newSessionId}/history`);
+      const histRes = await fetch(`/api/chat/${newSessionId}/history`, createFetchOptions());
       console.log('[Session] History response status:', histRes.status);
       
       const histData = await histRes.json();
@@ -339,9 +339,8 @@ function ChatApp() {
     if (!nextName) return;
 
     try {
-      const res = await fetch(`/api/chat/${id}/rename`, {
+      const res = await fetch(`/api/chat/${id}/rename`, createFetchOptions({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: nextName })
       });
       const data = await res.json();
@@ -477,7 +476,7 @@ function ChatApp() {
     
     try {
       console.log('[Session] Fetching history for', id);
-      const histRes = await fetch(`/api/chat/${id}/history`);
+      const histRes = await fetch(`/api/chat/${id}/history`, createFetchOptions());
       console.log('[Session] History response status:', histRes.status);
       
       const histData = await histRes.json();
@@ -522,10 +521,9 @@ function ChatApp() {
       const payload = { message: messageContent };
       console.log('[Chat] POST payload:', JSON.stringify(payload));
       
-      const res = await fetch(`/api/chat/${sessionId}/message`, {
+      const res = await fetch(`/api/chat/${sessionId}/message`, createFetchOptions({
         method: 'POST',
-        body: JSON.stringify(payload),
-        headers: { 'Content-Type': 'application/json' }
+        body: JSON.stringify(payload)
       });
       
       console.log('[Chat] Message response status:', res.status, res.statusText);
@@ -542,7 +540,7 @@ function ChatApp() {
       
       // Fetch updated history
       console.log('[Chat] Fetching updated history after message');
-      const histRes = await fetch(`/api/chat/${sessionId}/history`);
+      const histRes = await fetch(`/api/chat/${sessionId}/history`, createFetchOptions());
       console.log('[Chat] History response status:', histRes.status);
       
       const histData = await histRes.json();
@@ -576,7 +574,7 @@ function ChatApp() {
 
   const closeSession = async (id) => {
     try {
-      const res = await fetch(`/api/chat/${id}/close`, { method: 'POST' });
+      const res = await fetch(`/api/chat/${id}/close`, createFetchOptions({ method: 'POST' }));
       if (!res.ok) throw new Error(`Close failed: ${res.status}`);
       const remaining = sessions.filter(s => s.id !== id);
       setSessions(remaining);
