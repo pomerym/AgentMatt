@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import logging
+import re
 
 from .agent import agent
 from .plugin_loader import load_all_plugins, get_loaded_plugins, register_plugins
@@ -125,13 +126,32 @@ def initialize_providers():
         return False
 
 
-def _command_tokens(command: str) -> list[str]:
+def _normalize_command(command: str) -> str:
+    if not command:
+        return ""
+    parts = [p.strip() for p in re.split(r"\s*(?:&&|\|\||;)\s*", command) if p.strip()]
+    if not parts:
+        return command.strip()
+
+    for part in parts:
+        tokens = _command_tokens(part, normalize=False)
+        if not tokens:
+            continue
+        if tokens[0] == "cd":
+            continue
+        return part
+
+    return parts[-1]
+
+
+def _command_tokens(command: str, normalize: bool = True) -> list[str]:
     if not command:
         return []
+    target = _normalize_command(command) if normalize else command
     try:
-        return shlex.split(command)
+        return shlex.split(target)
     except ValueError:
-        return command.strip().split()
+        return target.strip().split()
 
 
 def _command_key(command: str) -> str:
@@ -149,6 +169,7 @@ def _command_matches_scope(command: str, scope: dict) -> bool:
         return False
     mode = (scope.get("mode") or "").lower()
     pattern = (scope.get("pattern") or "").strip()
+    command = _normalize_command(command)
     if mode == "all":
         return True
     if mode == "command":
@@ -163,7 +184,7 @@ def _command_matches_scope(command: str, scope: dict) -> bool:
 def _set_command_scope_from_pending(session, pending: dict, raw_args: str) -> dict:
     if not pending or pending.get("type") != "shell":
         return {}
-    command = pending.get("command", "").strip()
+    command = _normalize_command(pending.get("command", "").strip())
     args = (raw_args or "").strip().lower()
     if not args:
         return {}
@@ -190,6 +211,24 @@ def _set_command_scope_from_pending(session, pending: dict, raw_args: str) -> di
         return {"mode": "exact", "pattern": command}
 
     return {}
+
+
+def _get_persistent_scopes(user_id: str) -> list[dict]:
+    try:
+        return memory_manager.get_approval_scopes(user_id)
+    except Exception:
+        return []
+
+
+def _scope_allows_command(session, command: str) -> bool:
+    if not command:
+        return False
+    scopes = []
+    session_scope = session.settings.get("command_approval_scope")
+    if session_scope:
+        scopes.append(session_scope)
+    scopes.extend(_get_persistent_scopes(session.user_id))
+    return any(_command_matches_scope(command, scope) for scope in scopes)
 
 # Load and register plugins on startup
 load_all_plugins()
@@ -373,7 +412,7 @@ async def post_message(session_id: str, request: Request):
                     "assistant",
                     "Approval required to run: "
                     f"{next_cmd.get('command')}\n"
-                    "Reply with /approve, /approve command, /approve command-subcommand, /approve exact, or /deny.",
+                    "Reply with /approve, /approve command (permanent), /approve command-subcommand (permanent), /approve exact, or /deny.",
                     action_taken="command"
                 )
             else:
@@ -422,7 +461,7 @@ async def post_message(session_id: str, request: Request):
 
             prompt = (
                 "Approval required to run the requested command. "
-                "Reply with /approve, /approve command, /approve command-subcommand, /approve exact, or /deny."
+                "Reply with /approve, /approve command (permanent), /approve command-subcommand (permanent), /approve exact, or /deny."
             )
             session_manager.add_message_to_session(session_id, "assistant", prompt, action_taken=action_type)
             session_history = session_manager.get_session_history(session_id)
@@ -532,14 +571,13 @@ async def post_message(session_id: str, request: Request):
                 for cmd in suggested_commands:
                     pending_queue.append({"type": "shell", "command": cmd, "action_type": "command"})
 
-                command_scope = session.settings.get("command_approval_scope")
-                while pending_queue and _command_matches_scope(pending_queue[0].get("command", ""), command_scope):
+                while pending_queue and _scope_allows_command(session, pending_queue[0].get("command", "")):
                     next_cmd = pending_queue.pop(0)
                     session_manager.add_action_to_session(
                         session_id,
                         next_cmd.get("action_type", "command"),
                         status="completed",
-                        permission_requested=True,
+                        permission_requested=False,
                         permission_granted=True
                     )
                     response_text = execute_command_request(next_cmd)
@@ -556,7 +594,7 @@ async def post_message(session_id: str, request: Request):
                         permission = permission_manager.request_permission(
                             "default",
                             "command",
-                            f"Run command: {next_cmd.get('command')}",
+                            f"Run command: {_normalize_command(next_cmd.get('command', ''))}",
                             required=True
                         )
                         next_cmd["permission_id"] = permission.id
@@ -576,8 +614,8 @@ async def post_message(session_id: str, request: Request):
                         session_id,
                         "assistant",
                         "Approval required to run: "
-                        f"{next_cmd.get('command')}\n"
-                        "Reply with /approve, /approve command, /approve command-subcommand, /approve exact, or /deny.",
+                        f"{_normalize_command(next_cmd.get('command', ''))}\n"
+                        "Reply with /approve, /approve command (permanent), /approve command-subcommand (permanent), /approve exact, or /deny.",
                         action_taken="command"
                     )
                     session_history = session_manager.get_session_history(session_id)

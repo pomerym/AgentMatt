@@ -13,6 +13,10 @@ venv/
 dist/
 *.egg-info/
 
+# Runtime data
+backend/db/*.json
+output.json
+
 # Universal
 .DS_Store
 Thumbs.db

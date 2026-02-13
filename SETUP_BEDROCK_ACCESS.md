@@ -81,6 +81,10 @@ Mock Bedrock (anthropic.claude-3-sonnet-20240229-v1:0) response to: What is 2+2?
 - **Solution**: Verify credentials in `backend/config/providers.json` match your AWS IAM user
 - Ensure the IAM user has `bedrock:InvokeModel` permission
 
+### Avoid Committing Secrets
+Use env var placeholders in `backend/config/providers.json` and export the values
+in your shell or a local `.env` file that is not committed.
+
 ## What We Fixed
 
 The previous error was "Invalid API version: bedrock-2023-06-01". This was a formatting issue in the request sent to AWS.
