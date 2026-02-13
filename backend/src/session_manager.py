@@ -16,10 +16,11 @@ PERSIST_PATH = os.path.join(os.path.dirname(__file__), "../db/sessions.json")
 class ChatSession:
     """Represents a chat session with message and action history."""
     
-    def __init__(self, user_id: str = "default", provider: str = "copilot", settings: Optional[Dict] = None):
+    def __init__(self, user_id: str = "default", provider: str = "copilot", settings: Optional[Dict] = None, name: Optional[str] = None):
         self.session_id = str(uuid.uuid4())
         self.user_id = user_id
         self.provider = provider
+        self.name = name
         self.start_time = datetime.now()
         self.end_time = None
         self.messages = []
@@ -45,6 +46,7 @@ class ChatSession:
             "session_id": self.session_id,
             "user_id": self.user_id,
             "provider": self.provider,
+            "name": self.name,
             "start_time": self.start_time.isoformat(),
             "end_time": self.end_time.isoformat() if self.end_time else None,
             "messages": self.messages,
@@ -57,7 +59,8 @@ class ChatSession:
         session = ChatSession(
             user_id=data.get("user_id", "default"),
             provider=data.get("provider", "copilot"),
-            settings=data.get("settings")
+            settings=data.get("settings"),
+            name=data.get("name")
         )
         session.session_id = data.get("session_id", session.session_id)
         start_time = data.get("start_time")
@@ -69,6 +72,9 @@ class ChatSession:
         session.messages = data.get("messages", [])
         session.actions = data.get("actions", [])
         return session
+
+    def rename(self, name: str):
+        self.name = name
     
     def add_action(self, action_type: str, status: str = "pending", permission_requested: bool = False, permission_granted: bool = False):
         """Log an action in this session."""
@@ -126,9 +132,9 @@ class SessionManager:
         with open(PERSIST_PATH, "w") as f:
             json.dump(payload, f, indent=2)
     
-    def create_session(self, user_id: str = "default", provider: str = "copilot") -> ChatSession:
+    def create_session(self, user_id: str = "default", provider: str = "copilot", name: Optional[str] = None) -> ChatSession:
         """Create a new chat session."""
-        session = ChatSession(user_id=user_id, provider=provider)
+        session = ChatSession(user_id=user_id, provider=provider, name=name)
         self.sessions[session.session_id] = session
         self._save()
         return session
@@ -162,6 +168,14 @@ class SessionManager:
         if session:
             return session.get_history()
         return []
+
+    def rename_session(self, session_id: str, name: str) -> Optional[ChatSession]:
+        session = self.get_session(session_id)
+        if not session:
+            return None
+        session.rename(name)
+        self._save()
+        return session
     
     def get_session_actions(self, session_id: str) -> List[dict]:
         """Get the action log of a session."""
@@ -187,6 +201,7 @@ class SessionManager:
                 "session_id": session.session_id,
                 "user_id": session.user_id,
                 "provider": session.provider,
+                "name": session.name,
                 "start_time": session.start_time.isoformat(),
                 "end_time": session.end_time.isoformat() if session.end_time else None,
                 "message_count": len(session.messages)

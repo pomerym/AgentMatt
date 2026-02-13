@@ -43,7 +43,7 @@ The AI provider classes were created but their `initialize()` method was never c
 ### Startup Initialization
 Check logs after restart:
 ```bash
-tail -f ~/tmp/backend.log | grep PROVIDERS
+tail -f ./logs/backend.log | grep PROVIDERS
 ```
 
 You should see:
@@ -111,8 +111,8 @@ Use the provided scripts:
 ## Next Steps
 
 If issues persist:
-1. Check backend logs: `tail -f ~/tmp/backend.log`
-2. Check frontend logs: `tail -f ~/tmp/frontend.log`
+1. Check backend logs: `tail -f ./logs/backend.log`
+2. Check frontend logs: `tail -f ./logs/frontend.log`
 3. Check browser console (F12) for client-side errors
 4. Verify provider configuration in `backend/config/providers.json`
 5. Ensure AWS credentials are correct if using actual AWS Bedrock

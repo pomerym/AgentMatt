@@ -136,9 +136,9 @@ function ChatApp() {
         const data = await res.json();
         const existing = data.sessions || [];
         if (existing.length > 0) {
-          const mapped = existing.map((s, idx) => ({
-            id: s.session_id,
-            name: `Session ${existing.length - idx}`
+            const mapped = existing.map((s, idx) => ({
+              id: s.session_id,
+              name: s.name || `Session ${existing.length - idx}`
           }));
           setSessions(mapped);
           selectSession(existing[0].session_id);
@@ -240,7 +240,7 @@ function ChatApp() {
   const startSession = async () => {
     console.log('[Session] Starting new session');
     try {
-      const res = await fetch('/api/chat/start');
+      const res = await fetch('/api/chat/start', { method: 'POST' });
       console.log('[Session] Start response status:', res.status);
       
       const data = await res.json();
@@ -256,7 +256,8 @@ function ChatApp() {
       console.log('[Session] New session created:', newSessionId);
       
       setSessionId(newSessionId);
-      setSessions([...sessions, { id: newSessionId, name: `Session ${sessions.length + 1}` }]);
+          const newSessionName = data.name || `Session ${sessions.length + 1}`;
+          setSessions([...sessions, { id: newSessionId, name: newSessionName }]);
       
       // Fetch initial history
       console.log('[Session] Fetching initial history for', newSessionId);
@@ -545,7 +546,11 @@ function ChatApp() {
           justifyContent: 'space-between',
           boxShadow: '0 2px 8px #0d47a133'
         }}>
-          <span style={{ fontWeight: 600, fontSize: '1.1rem' }}>{sessionId ? `Session: ${sessionId}` : 'No session selected'}</span>
+          <span style={{ fontWeight: 600, fontSize: '1.1rem' }}>
+            {sessionId
+              ? `Session: ${(sessions.find(s => s.id === sessionId)?.name) || sessionId}`
+              : 'No session selected'}
+          </span>
           <span style={{ opacity: 0.7, fontSize: '0.95rem' }}>Provider: {provider}</span>
         </header>
         <div

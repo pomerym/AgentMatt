@@ -62,7 +62,7 @@ For more control, use the main management script:
 
 - **Backend**: Port 8000 (FastAPI with uvicorn)
 - **Frontend**: Port 3000 (React development server)
-- **Log Directory**: `~/tmp/`
+- **Log Directory**: `./logs/`
 
 ### Logs
 
@@ -70,10 +70,10 @@ After starting servers, you can view logs:
 
 ```bash
 # Tail backend logs
-tail -f ~/tmp/backend.log
+tail -f ./logs/backend.log
 
 # Tail frontend logs
-tail -f ~/tmp/frontend.log
+tail -f ./logs/frontend.log
 
 # Or use the management script
 ./manage-servers.sh logs backend
@@ -86,7 +86,7 @@ tail -f ~/tmp/frontend.log
 - Kills any processes on ports 3000 and 8000
 - Starts backend with uvicorn (with reload enabled)
 - Starts frontend with npm start
-- Creates ~/tmp directory for logs
+- Creates ./logs directory for logs
 - Shows server status and log locations
 
 ### stop-servers.sh
